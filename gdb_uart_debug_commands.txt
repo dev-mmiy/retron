@@ -1,0 +1,61 @@
+# UARTデバッグ用GDBコマンドリスト
+# このファイルをGDBで読み込んで使用: source gdb_uart_debug_commands.txt
+# 注意: 各ステップで手動でcontinueやstepiを実行してください
+
+# ==========================================
+# ステップ1: 初期設定
+# ==========================================
+set $pc = 0x40200000
+set $sp = 0x4ff00000
+
+# ==========================================
+# ステップ2: ブレークポイント設定
+# ==========================================
+break uart_pl011_init
+break uart_pl011_putchar
+
+# ==========================================
+# ステップ3: 実行開始（手動でcontinueを実行）
+# ==========================================
+# continue を手動で実行してください
+
+# uart_pl011_initで停止したら、以下を実行：
+# print/x *(volatile unsigned int*)0x09000030
+# finish
+# print/x *(volatile unsigned int*)0x09000030
+
+# uart_pl011_putcharで停止したら、以下を実行：
+# print/x $x0
+# print/x *(volatile unsigned int*)0x09000030
+# print/x *(volatile unsigned int*)0x09000018
+# print/x *(volatile unsigned int*)0x09000000
+
+# その後、stepiを8回実行してstr命令の直前まで進む：
+# stepi
+# stepi
+# stepi
+# stepi
+# stepi
+# stepi
+# stepi
+# stepi
+
+# str命令の直前で：
+# print/x $x1
+# print/x $x0
+
+# str命令を実行：
+# stepi
+
+# UARTDRを確認：
+# print/x *(volatile unsigned int*)0x09000000
+# print/x *(volatile unsigned int*)0x09000018
+
+# メモリバリアの後：
+# stepi
+# print/x *(volatile unsigned int*)0x09000000
+
+# 関数の終了まで実行：
+# finish
+# print/x *(volatile unsigned int*)0x09000000
+# print/x *(volatile unsigned int*)0x09000018

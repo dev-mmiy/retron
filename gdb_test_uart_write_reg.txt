@@ -1,0 +1,47 @@
+# uart_write_reg関数のテスト
+
+# ステップ1: uart_pl011_initのブレークポイントを設定
+break uart_pl011_init
+
+# ステップ2: 実行してuart_pl011_initで停止
+continue
+
+# ステップ3: 関数をステップ実行
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+
+# ステップ4: UARTCRへの書き込みを確認（82行目付近）
+# cr = UART_CR_UARTEN | UART_CR_TXE | UART_CR_RXE;
+# uart_write_reg(0x030, cr);
+# この時点で、uart_write_regが呼ばれる前に停止
+
+# ステップ5: uart_write_reg関数内で停止
+break uart_write_reg
+continue
+
+# ステップ6: 引数を確認
+print/x $x0  # offset (0x030)
+print/x $x1  # value (0x301)
+
+# ステップ7: ステップ実行でメモリへの書き込みを確認
+stepi
+stepi
+stepi
+stepi
+
+# ステップ8: UARTCRを確認
+print/x *(volatile unsigned int*)0x09000030
+
+# ステップ9: 関数の終了まで実行
+finish
+
+# ステップ10: 再度UARTCRを確認
+print/x *(volatile unsigned int*)0x09000030

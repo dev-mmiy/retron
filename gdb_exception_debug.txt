@@ -1,0 +1,22 @@
+# 例外デバッグコマンド
+
+# 1. 現在の状態を確認
+info registers
+x/10i $pc
+
+# 2. 例外レジスタを確認
+print/x $esr_el1
+print/x $far_el1
+print/x $elr_el1
+
+# 3. スタックを確認
+info registers sp
+x/16x $sp
+
+# 4. 例外の種類を確認
+# ESR_EL1のECフィールド（bits 31:26）で例外クラスを確認
+# ESR_EL1のISSフィールド（bits 24:0）で例外固有情報を確認
+
+# 5. バックトレースを確認
+backtrace
+info frame

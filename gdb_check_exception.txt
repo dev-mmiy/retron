@@ -1,0 +1,23 @@
+# 例外確認コマンド
+
+# 1. 例外レジスタを確認（ARM AArch64のシステムレジスタ）
+# 注意: GDBでは直接アクセスできない場合があるので、メモリから読み取る必要があるかもしれません
+
+# 2. 現在のPCと命令を確認
+info registers pc
+x/10i $pc
+
+# 3. スタックを確認
+info registers sp
+x/16x $sp
+
+# 4. レジスタ全体を確認
+info registers
+
+# 5. 例外ベクターテーブルのアドレスを確認
+print/x &exception_vector_table
+x/10i exception_vector_table
+
+# 6. バックトレース（可能な場合）
+backtrace
+info frame

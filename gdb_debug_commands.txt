@@ -1,0 +1,19 @@
+# GDBデバッグコマンド
+
+# 1. 現在の状態を確認
+info registers pc
+x/10i $pc
+
+# 2. エントリーポイントのメモリを確認
+x/16x 0x40200000
+
+# 3. エントリーポイントに移動
+set $pc = 0x40200000
+x/10i $pc
+
+# 4. スタックポインタを確認
+info registers sp
+x/16x $sp
+
+# 5. メモリマッピングを確認
+info proc mappings

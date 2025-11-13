@@ -1,0 +1,25 @@
+# UART出力確認コマンド
+
+# uart_pl011_putcharブレークポイントで停止したら：
+
+# 1. 引数（x0）を確認（送信する文字）
+print/x $x0
+print/c $x0
+
+# 2. UARTレジスタの状態を確認
+x/16x 0x09000000
+
+# 3. UART Data Register (0x09000000) を確認
+print/x *(volatile unsigned int*)0x09000000
+
+# 4. UART Flag Register (0x09000018) を確認
+print/x *(volatile unsigned int*)0x09000018
+
+# 5. UART Control Register (0x09000030) を確認
+print/x *(volatile unsigned int*)0x09000030
+
+# 6. ステップ実行でUARTレジスタへの書き込みを確認
+stepi
+stepi
+x/16x 0x09000000
+print/x *(volatile unsigned int*)0x09000000

@@ -1,0 +1,25 @@
+# UART書き込みテストコマンド
+
+# uart_pl011_initブレークポイントで停止したら：
+
+# 1. 関数の開始時点でUARTCRを確認
+print/x *(volatile unsigned int*)0x09000030
+
+# 2. ステップ実行で初期化を追跡
+# 特に80行目のUARTCRへの書き込みを確認
+finish
+
+# 3. UARTCRが正しく設定されたか確認
+print/x *(volatile unsigned int*)0x09000030
+
+# 4. uart_pl011_putcharで停止したら
+# 引数を確認
+print/x $x0
+print/c $x0
+
+# 5. ステップ実行でUARTDRへの書き込みを確認
+finish
+
+# 6. UARTDRにデータが書き込まれたか確認
+print/x *(volatile unsigned int*)0x09000000
+print/x *(volatile unsigned int*)0x09000018

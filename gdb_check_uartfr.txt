@@ -1,0 +1,31 @@
+# UARTFRの状態を確認するコマンド
+
+# ステップ1: uart_pl011_putcharで停止
+break uart_pl011_putchar
+continue
+
+# ステップ2: UARTFRを確認（書き込み前）
+print/x *(volatile unsigned int*)0x09000018
+# 期待値: 0x90 (TXFE=1, RXFE=1, TXFF=0)
+
+# ステップ3: str命令の直前までステップ実行
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+
+# ステップ4: str命令を実行
+stepi
+
+# ステップ5: UARTFRを確認（書き込み後）
+print/x *(volatile unsigned int*)0x09000018
+# TXFEビット（bit 7）がクリアされているか確認
+# TXFFビット（bit 5）がセットされていないか確認
+
+# ステップ6: メモリバリアの後も確認
+stepi
+print/x *(volatile unsigned int*)0x09000018

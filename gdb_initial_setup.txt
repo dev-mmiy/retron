@@ -1,0 +1,14 @@
+# GDB初期設定コマンド
+
+# 1. エントリーポイントに移動
+set $pc = 0x40200000
+
+# 2. スタックポインタを設定
+set $sp = 0x4ff00000
+
+# 3. 確認
+info registers pc sp
+x/10i $pc
+
+# 4. 実行を開始
+continue

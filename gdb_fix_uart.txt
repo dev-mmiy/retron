@@ -1,0 +1,16 @@
+# UART修正コマンド
+
+# 問題: UARTCR = 0x300 (UARTEN=0, 無効)
+# 正常値: UARTCR = 0x301 (UARTEN=1, TXE=1, RXE=1)
+
+# 1. UARTCRを有効化
+set *(volatile unsigned int*)0x09000030 = 0x301
+
+# 2. 確認
+print/x *(volatile unsigned int*)0x09000030
+
+# 3. UARTFRを確認
+print/x *(volatile unsigned int*)0x09000018
+
+# 4. uart_pl011_putcharを再度呼び出すか、continueで次に進む
+continue

@@ -1,0 +1,36 @@
+# UARTDR書き込み確認コマンド
+
+# uart_pl011_putcharブレークポイントで停止したら：
+
+# 1. 引数（送信する文字）を確認
+print/x $x0
+print/c $x0
+
+# 2. 関数実行前のUARTDRを確認
+print/x *(volatile unsigned int*)0x09000000
+
+# 3. 関数をステップ実行
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+
+# 4. UARTDRにデータが書き込まれたか確認
+print/x *(volatile unsigned int*)0x09000000
+
+# 5. UARTFRの状態を確認
+print/x *(volatile unsigned int*)0x09000018
+# TXFE (bit 7): TX FIFO Empty
+# TXFF (bit 5): TX FIFO Full
+# BUSY (bit 3): UART Busy
+
+# 6. 関数の終了まで実行
+finish
+
+# 7. 再度UARTDRとUARTFRを確認
+print/x *(volatile unsigned int*)0x09000000
+print/x *(volatile unsigned int*)0x09000018

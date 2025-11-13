@@ -1,0 +1,36 @@
+# 例外の詳細を確認するGDBコマンド
+
+# 現在、exception_vector_tableで停止している状態から：
+
+# ステップ1: 例外の種類を確認
+print/x $esr_el1  # Exception Syndrome Register
+# ESR_EL1 = 0x96000010
+# - EC (bits 31:26) = 0x25 = 100101 = Data Abort from a lower Exception level
+# - ISS (bits 24:0) = 0x6000010 = データアボート例外
+
+# ステップ2: アクセスしようとしたアドレスを確認
+print/x $far_el1  # Fault Address Register
+# FAR_EL1 = 0x300000000020000
+
+# ステップ3: 例外が発生したアドレスを確認
+print/x $elr_el1  # Exception Link Register
+# ELR_EL1 = 0x40212b80 (search_conf内)
+
+# ステップ4: 例外が発生したコードを確認
+x/10i $elr_el1  # 例外が発生した命令を確認
+
+# ステップ5: 呼び出し元のフレームを確認
+frame 1  # search_conf
+list
+disassemble search_conf
+info registers
+
+# ステップ6: さらに上位のフレームを確認
+frame 2  # getcfn
+list
+info registers
+
+frame 3  # init_memmgr
+list
+info registers
+

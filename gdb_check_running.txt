@@ -1,0 +1,18 @@
+# 実行状態確認コマンド
+
+# 1. 実行を中断
+interrupt
+
+# 2. 現在の状態を確認
+info registers pc
+x/10i $pc
+
+# 3. スタックを確認
+info registers sp
+x/16x $sp
+
+# 4. 実行を続ける
+continue
+
+# または、特定のブレークポイントまで実行
+# continue 10  # 10回のブレークポイントまで実行

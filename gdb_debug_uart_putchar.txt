@@ -1,0 +1,32 @@
+# uart_pl011_putcharのデバッグ
+
+# ステップ1: uart_pl011_putcharで停止
+break uart_pl011_putchar
+continue
+
+# ステップ2: 引数とUARTCRを確認
+print/x $x0  # 送信する文字
+print/x *(volatile unsigned int*)0x09000030  # UARTCR（0x301であることを確認）
+print/x *(volatile unsigned int*)0x09000018  # UARTFR（書き込み前）
+print/x *(volatile unsigned int*)0x09000000  # UARTDR（書き込み前）
+
+# ステップ3: 関数をステップ実行
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+
+# ステップ4: UARTDRとUARTFRを確認
+print/x *(volatile unsigned int*)0x09000000  # UARTDR（書き込み後）
+print/x *(volatile unsigned int*)0x09000018  # UARTFR（書き込み後）
+
+# ステップ5: 関数の終了まで実行
+finish
+
+# ステップ6: 再度UARTDRとUARTFRを確認
+print/x *(volatile unsigned int*)0x09000000
+print/x *(volatile unsigned int*)0x09000018

@@ -1,0 +1,43 @@
+# uart_pl011_putcharで停止している状態から確認するコマンド
+
+# ステップ1: すべてのブレークポイントを削除して、uart_pl011_putcharのみに設定
+delete
+break uart_pl011_putchar
+
+# ステップ2: 実行を再開
+continue
+
+# ステップ3: uart_pl011_putcharで停止したら、スタックトレースを確認
+bt
+bt 10
+
+# ステップ4: 現在のレジスタを確認
+info registers
+print/x $x0  # 送信する文字
+print/c $x0
+
+# ステップ5: 呼び出し元のフレームに移動
+frame 1  # 呼び出し元のフレーム
+list
+info registers
+
+# ステップ6: 呼び出し元のコードを逆アセンブル
+disassemble
+
+# ステップ7: 文字列のアドレスを確認
+# frame 1で確認したレジスタを使って
+print/x $x0  # 文字列のアドレスかもしれない
+x/s $x0  # 文字列の内容を確認
+x/32x $x0  # 文字列のメモリ内容を確認
+
+# ステップ8: さらに上位のフレームを確認
+frame 2  # さらに上位のフレーム
+list
+info registers
+
+# ステップ9: usermainまで遡る
+# frame番号を確認して、usermainのフレームに移動
+frame N  # Nはusermainのフレーム番号
+list
+info registers
+

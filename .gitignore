@@ -1,0 +1,37 @@
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+*.elf
+*.bin
+*.img
+
+# QEMU
+*.img
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# T-Kernel (third party)
+third_party/t-kernel/
+
+# Logs
+*.log
+
+
+
+

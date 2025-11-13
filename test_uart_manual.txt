@@ -1,0 +1,21 @@
+# 手動UARTテストコマンド
+
+# 1. UARTCRを確認（0x301であることを確認）
+print/x *(volatile unsigned int*)0x09000030
+
+# 2. UARTFRを確認
+print/x *(volatile unsigned int*)0x09000018
+
+# 3. 手動でUARTDRに文字を書き込む
+set *(volatile unsigned int*)0x09000000 = 0x48  # 'H'
+print/x *(volatile unsigned int*)0x09000000
+
+# 4. UARTFRを再度確認
+print/x *(volatile unsigned int*)0x09000018
+
+# 5. 複数の文字を送信
+set *(volatile unsigned int*)0x09000000 = 0x65  # 'e'
+set *(volatile unsigned int*)0x09000000 = 0x6c  # 'l'
+set *(volatile unsigned int*)0x09000000 = 0x6c  # 'l'
+set *(volatile unsigned int*)0x09000000 = 0x6f  # 'o'
+set *(volatile unsigned int*)0x09000000 = 0x0a  # '\n'

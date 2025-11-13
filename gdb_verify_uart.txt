@@ -1,0 +1,17 @@
+# UART確認コマンド
+
+# 1. UARTレジスタの状態を確認
+x/16x 0x09000000
+
+# 2. UART Control Register (0x09000030) を確認
+print/x *(volatile unsigned int*)0x09000030
+
+# 3. UART Flag Register (0x09000018) を確認
+print/x *(volatile unsigned int*)0x09000018
+
+# 4. 現在のレジスタ状態を確認
+info registers x0 x1 x2
+
+# 5. 現在のPCと命令を確認
+info registers pc
+x/10i $pc

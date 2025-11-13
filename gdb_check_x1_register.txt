@@ -1,0 +1,30 @@
+# x1レジスタとUARTDR書き込みの確認
+
+# ステップ1: uart_pl011_putcharで停止
+break uart_pl011_putchar
+continue
+
+# ステップ2: str命令の直前まで実行
+stepi  # and w0, w0, #0xff
+stepi  # mov x2, #0x18
+stepi  # movk x2, #0x900, lsl #16
+stepi  # nop
+stepi  # ldr x1, [x2]
+stepi  # tbnz w1, #5, ...
+stepi  # mov x1, #0x9000000
+stepi  # and x0, x0, #0xff
+
+# ステップ3: str命令の直前でx1の値を確認
+print/x $x1  # 0x09000000であるべき
+print/x $x0  # 送信する文字（0x13）
+
+# ステップ4: str命令を実行
+stepi  # str x0, [x1]
+
+# ステップ5: UARTDRを確認
+print/x *(volatile unsigned int*)0x09000000  # UARTDR
+print/x *(volatile unsigned int*)0x09000018  # UARTFR
+
+# ステップ6: メモリバリアの後も確認
+stepi  # dmb sy
+print/x *(volatile unsigned int*)0x09000000  # UARTDR

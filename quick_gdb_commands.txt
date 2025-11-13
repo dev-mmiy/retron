@@ -1,0 +1,30 @@
+# クイックGDBコマンド集
+
+# 1. エントリーポイントに移動
+set $pc = 0x40200000
+x/10i $pc
+
+# 2. 実行を開始
+continue
+
+# 3. startブレークポイントで停止したら
+info registers pc
+x/10i $pc
+continue
+
+# 4. mainブレークポイントで停止したら
+info registers pc
+x/10i $pc
+continue
+
+# 5. uart_pl011_initブレークポイントで停止したら
+info registers pc
+x/10i $pc
+x/16x 0x09000000
+continue
+
+# 6. uart_pl011_putcharブレークポイントで停止したら
+info registers pc
+print/x $x0
+x/16x 0x09000000
+continue

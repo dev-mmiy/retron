@@ -1,0 +1,23 @@
+# GDBスタック設定コマンド
+
+# QEMU virt machine のメモリマップ:
+# - RAM: 0x40000000 - 0x50000000 (256MB)
+# - スタックは通常、RAMの上位アドレスに設定
+
+# 1. スタックポインタを設定（RAMの上位アドレス）
+set $sp = 0x4ff00000
+
+# 2. スタックポインタを確認
+info registers sp
+x/16x $sp
+
+# 3. PCレジスタを確認
+info registers pc
+
+# 4. 実行を開始
+continue
+
+# または、ステップ実行で確認
+# stepi
+# stepi
+# info registers pc sp

@@ -1,0 +1,6 @@
+[package]
+name = "retron-tkernel-interface"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]

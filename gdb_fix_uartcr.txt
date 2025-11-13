@@ -1,0 +1,38 @@
+# UARTCR修正手順
+
+# 問題: UARTCR = 0x300 (UARTEN=0, UARTが無効)
+# 解決: uart_pl011_initを実行してUARTCRを0x301に設定
+
+# ステップ1: uart_pl011_initのブレークポイントを設定
+break uart_pl011_init
+
+# ステップ2: 実行してuart_pl011_initで停止
+continue
+
+# ステップ3: 関数をステップ実行してUARTCRの設定を確認
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+
+# ステップ4: UARTCRを確認（0x301になっているか）
+print/x *(volatile unsigned int*)0x09000030
+
+# ステップ5: 関数の終了まで実行
+finish
+
+# ステップ6: 再度UARTCRを確認
+print/x *(volatile unsigned int*)0x09000030
+
+# ステップ7: 手動でUARTCRを設定（必要に応じて）
+set *(volatile unsigned int*)0x09000030 = 0x301
+
+# ステップ8: UARTDRに文字を書き込んでテスト
+set *(volatile unsigned int*)0x09000000 = 0x48
+print/x *(volatile unsigned int*)0x09000000

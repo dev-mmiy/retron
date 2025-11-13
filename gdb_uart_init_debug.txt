@@ -1,0 +1,31 @@
+# UART初期化デバッグコマンド
+
+# uart_pl011_initブレークポイントで停止したら：
+
+# 1. 関数の開始時点でUARTCRを確認
+print/x *(volatile unsigned int*)0x09000030
+
+# 2. ステップ実行で初期化を追跡
+stepi
+stepi
+stepi
+
+# 3. UARTCRへの書き込みを確認（80行目付近）
+# cr = UART_CR_UARTEN | UART_CR_TXE | UART_CR_RXE;
+# uart_write_reg(0x030, cr);
+stepi
+stepi
+stepi
+stepi
+stepi
+stepi
+
+# 4. UARTCRが正しく設定されたか確認
+print/x *(volatile unsigned int*)0x09000030
+
+# 5. 関数の終了まで実行
+finish
+
+# 6. 再度UARTCRを確認
+print/x *(volatile unsigned int*)0x09000030
+print/x *(volatile unsigned int*)0x09000018

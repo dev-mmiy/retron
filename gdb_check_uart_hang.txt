@@ -1,0 +1,28 @@
+# uart_pl011_putcharで固まっている状態から確認するコマンド
+
+# ステップ1: Ctrl+Cで中断
+# （既に停止している場合は不要）
+
+# ステップ2: 現在の状態を確認
+bt  # スタックトレース
+info registers
+print/x $x0  # 送信する文字
+
+# ステップ3: UARTレジスタの状態を確認
+print/x *(volatile unsigned int*)0x09000030  # UARTCR（0x301であるべき）
+print/x *(volatile unsigned int*)0x09000018  # UARTFR（TXFFビットを確認）
+print/x *(volatile unsigned int*)0x09000000  # UARTDR
+
+# ステップ4: uart_pl011_putchar内でどこで停止しているか確認
+disassemble uart_pl011_putchar
+x/20i $pc  # 現在の命令周辺を確認
+
+# ステップ5: ステップ実行で確認
+stepi  # 1命令実行
+print/x *(volatile unsigned int*)0x09000018  # UARTFRを再確認
+stepi  # さらに1命令実行
+print/x *(volatile unsigned int*)0x09000018  # UARTFRを再確認
+
+# ステップ6: 無限ループに陥っているか確認
+# whileループ内で停止している場合、UARTFRのTXFFビットが常に1になっている可能性
+

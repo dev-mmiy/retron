@@ -1,0 +1,22 @@
+# メモリマッピング確認コマンド
+
+# 問題: UARTCRへの書き込みが反映されない（0x300のまま）
+
+# ステップ1: メモリマッピングを確認
+x/16x 0x09000000
+
+# ステップ2: SCTLR_EL1を確認（MMUとキャッシュの状態）
+# GDBでは直接確認できないので、コードで確認する必要がある
+
+# ステップ3: 別のアドレスに書き込んでテスト
+set *(volatile unsigned int*)0x40200000 = 0x12345678
+print/x *(volatile unsigned int*)0x40200000
+
+# ステップ4: UARTレジスタの読み取りを確認
+print/x *(volatile unsigned int*)0x09000000
+print/x *(volatile unsigned int*)0x09000004
+print/x *(volatile unsigned int*)0x09000018
+print/x *(volatile unsigned int*)0x09000030
+
+# ステップ5: メモリバリアを試す（GDBでは直接実行できない）
+# コードで確認する必要がある
