@@ -18,9 +18,7 @@
  *	Device-Dependent Initialization
  */
 
-#include "kernel.h"
-#include <tk/sysdef.h>
-#include <sys/sysinfo.h>
+#include "types.h"
 #include "tkdev_conf.h"
 
 /*

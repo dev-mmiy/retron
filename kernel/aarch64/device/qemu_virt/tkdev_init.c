@@ -18,10 +18,8 @@
  *	Device-Dependent Initialization/Finalization
  */
 
-#include "kernel.h"
-#include <tk/sysdef.h>
+#include "types.h"
 #include "tkdev_conf.h"
-#include "tkdev_timer.h"
 
 /*
  * Target system-dependent initialization
