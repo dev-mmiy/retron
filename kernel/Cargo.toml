@@ -1,0 +1,36 @@
+[package]
+name = "retron-kernel"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "retron-kernel"
+path = "src/main.rs"
+
+[dependencies]
+# カーネル用のno_std環境
+
+# メモリ管理
+linked_list_allocator = "0.10"
+
+# ハードウェア抽象化
+x86_64 = "0.14"
+volatile = "0.4"
+spin = "0.9"
+
+# 割り込み処理
+pic8259 = "0.10"
+
+# シリアル通信
+uart_16550 = "0.2"
+
+[profile.dev]
+panic = "abort"
+lto = false
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+opt-level = "s"
+

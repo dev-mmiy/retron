@@ -1,0 +1,32 @@
+[package]
+name = "retron-ui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Coreレイヤーとの連携
+retron-core = { path = "../core" }
+
+# グラフィックス処理
+embedded-graphics = "0.7"
+tinybmp = "0.3"
+
+# フォント処理
+embedded-text = "0.6"
+
+# イベント処理
+embedded-hal = "1.0"
+
+# メモリ管理
+linked_list_allocator = "0.10"
+
+# 同期処理
+spin = "0.9"
+
+# ログ
+log = "0.4"
+
+# 数学計算
+libm = "0.2"
+
+

@@ -1,0 +1,32 @@
+[package]
+name = "retron-robot"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Coreレイヤーとの連携
+retron-core = { path = "../core" }
+
+# 数学計算
+libm = "0.2"
+nalgebra = "0.32"
+
+# シリアル通信
+embedded-serial = "0.1"
+
+# タイマー
+embedded-time = "0.12"
+
+# メモリ管理
+linked_list_allocator = "0.10"
+
+# 同期処理
+spin = "0.9"
+
+# ログ
+log = "0.4"
+
+# 設定管理
+serde = { version = "1.0", features = ["derive"] }
+
+

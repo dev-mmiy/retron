@@ -1,0 +1,30 @@
+[package]
+name = "retron-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# カーネルとの連携
+retron-kernel = { path = "../kernel" }
+
+# ハードウェア抽象化
+embedded-hal = "1.0"
+nb = "1.0"
+
+# シリアル通信
+embedded-serial = "0.5"
+
+# タイマー
+embedded-time = "0.12"
+
+# メモリ管理
+linked_list_allocator = "0.10"
+
+# 同期処理
+spin = "0.9"
+
+# ログ
+log = "0.4"
+
+# プラットフォーム固有の機能
+cfg-if = "1.0"
