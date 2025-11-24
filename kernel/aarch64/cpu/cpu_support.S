@@ -244,13 +244,16 @@ dispatch_entry:
 	ldr	x5, =TASKMODE
 	mov	x0, #0
 	ldr	x8, [x4]			// X8 = ctxtsk
-	str	sp, [x8, #TCB_tskctxb + CTXB_ssp] // save ssp to TCB
+	mov	x9, sp				// Copy sp to x9
+	str	x9, [x8, #TCB_tskctxb + CTXB_ssp] // save ssp to TCB
 	str	x0, [x4]			// ctxtsk = NULL
 	str	w0, [x5]			// taskmode = 0
 
 l_dispatch0:
 	/* Align stack to 16 bytes */
-	and	sp, sp, #~0xf
+	mov	x9, sp
+	bic	x9, x9, #0xf
+	mov	sp, x9
 
 	/* interrupt-enabled state */
 	ldr	x5, =schedtsk			// X5 = &schedtsk
@@ -274,7 +277,8 @@ l_dispatch2:
 	/* dispatch to schedtsk */
 	/* interrupt-disabled state */
 	str	x8, [x4]			// ctxtsk = schedtsk
-	ldr	sp, [x8, #TCB_tskctxb + CTXB_ssp] // restore ssp from TCB
+	ldr	x9, [x8, #TCB_tskctxb + CTXB_ssp] // restore ssp from TCB
+	mov	sp, x9
 
 #if USE_MMU
 	/* switch task spaces */
