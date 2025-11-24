@@ -21,41 +21,13 @@
 #ifndef _OFFSET_
 #define _OFFSET_
 
-/* Adjust offset of TCB member variables in offset.h for cpu_support.S */
-#include "config.h"
-
-/*	TCB.wrdvno	*/
-#if defined(NUM_PORID)
-#define TCBSZ_POR	(8)	/* = sizeof(RNO) - 64bit aligned */
-#else
-#define TCBSZ_POR	(0)
-#endif
-
-/*	TCB.mtxlist	*/
-#if defined(NUM_MTXID)
-#define TCBSZ_MTX	(8)	/* = sizeof(MTXCB*) - 64bit pointer */
-#else
-#define TCBSZ_MTX	(0)
-#endif
-
-/*	TCB.winfo.xxx	*/
-#if defined(NUM_PORID)
-#define TCBSZ_WINFO	(32)	/* 64bit aligned */
-#else
-#if defined(NUM_FLGID)
-#define TCBSZ_WINFO	(24)
-#else
-#if defined(NUM_MBFID)||defined(NUM_MPLID)
-#define TCBSZ_WINFO	(16)
-#else
-#if defined(NUM_SEMID)||defined(NUM_MBXID)||defined(NUM_MPFID)
-#define TCBSZ_WINFO	(8)
-#else
-#define TCBSZ_WINFO	(0)
-#endif
-#endif
-#endif
-#endif
+/*
+ * For standalone test kernel, define sizes directly.
+ * In full T-Kernel build, these would come from config.h
+ */
+#define TCBSZ_POR	(0)	/* No rendezvous support for now */
+#define TCBSZ_MTX	(0)	/* No mutex support for now */
+#define TCBSZ_WINFO	(0)	/* Minimal wait info */
 
 /* AArch64: 64 bit CPU alignment */
 #define _ALIGN_CPU(x)	(((x)+7)&0xFFFFFFF8)
