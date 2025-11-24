@@ -35,6 +35,7 @@ ASM_SRCS = \
 
 C_SRCS = \
 	kernel_main.c \
+	kernel_stubs.c \
 	devinit.c \
 	tkdev_init.c
 
