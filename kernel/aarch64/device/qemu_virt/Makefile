@@ -21,7 +21,7 @@ OBJDUMP = $(CROSS_COMPILE)objdump
 
 # Directories
 DEVICE_DIR = .
-CPU_DIR = ../../cpu/aarch64
+CPU_DIR = ../../cpu
 
 # Target
 TARGET = kernel
