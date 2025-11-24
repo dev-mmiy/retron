@@ -17,13 +17,19 @@
  */
 
 #include "tkdev_conf.h"
+#include "tkdev_timer.h"
 
 /* Simple type definitions for standalone build */
 typedef unsigned int		UW;
 typedef int			INT;
 typedef int			ER;
+typedef unsigned long long	UD;
 
 #define E_OK			0
+
+/* Timer counter */
+UW timer_freq = 0;		/* Timer frequency (from CNTFRQ_EL0) */
+static volatile UD timer_tick_count = 0;	/* Timer tick counter */
 
 /*
  * UART output functions
@@ -129,6 +135,12 @@ void kernel_main(void)
 	uart_puts("System ready.\n");
 	uart_puts("\n");
 
+	/* Start timer interrupts */
+	uart_puts("Starting timer interrupts (1ms period)...\n");
+	start_hw_timer();
+	uart_puts("Timer started.\n");
+	uart_puts("\n");
+
 	/* Main loop - in a real system, this would start the scheduler */
 	uart_puts("Entering idle loop...\n");
 	for (;;) {
@@ -137,7 +149,26 @@ void kernel_main(void)
 }
 
 /*
- * Exception handlers (weak implementations)
+ * Timer interrupt handler
+ */
+void timer_handler(void)
+{
+	/* Increment tick counter */
+	timer_tick_count++;
+
+	/* Print message every 1000 ticks (1 second at 1ms per tick) */
+	if ((timer_tick_count % 1000) == 0) {
+		uart_puts("Timer tick: ");
+		uart_puthex((UW)(timer_tick_count / 1000));
+		uart_puts(" seconds\n");
+	}
+
+	/* Clear timer interrupt and rearm for next period */
+	clear_hw_timer_interrupt();
+}
+
+/*
+ * Exception handlers
  */
 void sync_exception_handler(void *sp)
 {
@@ -148,8 +179,27 @@ void sync_exception_handler(void *sp)
 
 void irq_exception_handler(void *sp)
 {
+	volatile UW *gicc_iar = (volatile UW *)GICC_IAR;
+	volatile UW *gicc_eoir = (volatile UW *)GICC_EOIR;
+	UW intno;
+
 	(void)sp;
-	uart_puts("IRQ!\n");
+
+	/* Read interrupt number from GIC */
+	intno = *gicc_iar & 0x3FF;
+
+	/* Handle timer interrupt */
+	if (intno == TIMER_IRQ) {
+		timer_handler();
+	} else {
+		/* Unknown interrupt */
+		uart_puts("IRQ: ");
+		uart_puthex(intno);
+		uart_puts("\n");
+	}
+
+	/* Acknowledge interrupt */
+	*gicc_eoir = intno;
 }
 
 void fiq_exception_handler(void *sp)
