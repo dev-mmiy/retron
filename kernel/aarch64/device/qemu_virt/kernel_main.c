@@ -28,7 +28,7 @@ typedef unsigned long long	UD;
 #define E_OK			0
 
 /* Timer counter */
-UW timer_freq = 0;		/* Timer frequency (from CNTFRQ_EL0) */
+extern UW timer_freq;		/* Timer frequency (defined in icrt0.S) */
 static volatile UD timer_tick_count = 0;	/* Timer tick counter */
 
 /*
