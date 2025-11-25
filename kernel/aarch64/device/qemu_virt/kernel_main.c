@@ -141,6 +141,12 @@ void kernel_main(void)
 	uart_puts("Timer started.\n");
 	uart_puts("\n");
 
+	/* Enable IRQ interrupts */
+	uart_puts("Enabling IRQ interrupts...\n");
+	__asm__ volatile("msr daifclr, #2");  // Clear IRQ mask (bit 1)
+	uart_puts("IRQ enabled.\n");
+	uart_puts("\n");
+
 	/* Main loop - in a real system, this would start the scheduler */
 	uart_puts("Entering idle loop...\n");
 	for (;;) {
