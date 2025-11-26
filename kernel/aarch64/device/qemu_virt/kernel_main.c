@@ -110,9 +110,15 @@ extern void dispatch_to_schedtsk(void);
 static void setup_task_context(TCB *tcb, TASK_FP task, void *stack, INT stksz)
 {
 	SStackFrame *ssp;
+	UW64 stack_top;
 
-	/* Set up initial stack pointer (top of stack) */
-	tcb->isstack = (void*)((UW64)stack + stksz);
+	/* Calculate top of stack (grows downward) */
+	stack_top = (UW64)stack + stksz;
+
+	/* Align to 16 bytes */
+	stack_top &= ~0xFULL;
+
+	tcb->isstack = (void*)stack_top;
 
 	/* Reserve space for SStackFrame at top of stack */
 	ssp = (SStackFrame*)tcb->isstack;
@@ -122,12 +128,19 @@ static void setup_task_context(TCB *tcb, TASK_FP task, void *stack, INT stksz)
 	for (int i = 0; i < 31; i++) {
 		ssp->x[i] = 0;
 	}
-	ssp->pc = (UW64)task;		/* Task entry point */
-	ssp->sp = 0;			/* Not used for kernel tasks */
-	ssp->spsr = 0x00000004;		/* EL1h, interrupts enabled */
+
+	/* Set up task entry point */
+	ssp->pc = (UW64)task;
+
+	/* Set up stack pointer (point below the SStackFrame) */
+	ssp->sp = (UW64)ssp;
+
+	/* SPSR: EL1h mode (0x5), IRQ/FIQ enabled (I=0, F=0) */
+	ssp->spsr = 0x00000005;		/* EL1h with SP_EL1 */
+
 	ssp->taskmode = 0;
 
-	/* Save context */
+	/* Save context pointer */
 	tcb->tskctxb.ssp = ssp;
 }
 
