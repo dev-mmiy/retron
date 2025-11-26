@@ -109,7 +109,7 @@ extern void dispatch_to_schedtsk(void);
 /* Initialize task context */
 static void setup_task_context(TCB *tcb, TASK_FP task, void *stack, INT stksz)
 {
-	SStackFrame *ssp;
+	UW64 *sp;
 	UW64 stack_top;
 
 	/* Calculate top of stack (grows downward) */
@@ -120,28 +120,36 @@ static void setup_task_context(TCB *tcb, TASK_FP task, void *stack, INT stksz)
 
 	tcb->isstack = (void*)stack_top;
 
-	/* Reserve space for SStackFrame at top of stack */
-	ssp = (SStackFrame*)tcb->isstack;
-	ssp--;
+	/* Set up stack to match RESTORE_CONTEXT expectations */
+	/* RESTORE_CONTEXT expects (from low to high addresses): */
+	/* [SP+0]: SPSR, padding */
+	/* [SP+16]: X30 (LR), ELR_EL1 (PC) */
+	/* [SP+32..254]: X28-X29, X26-X27, ..., X2-X3, X0-X1 */
 
-	/* Initialize stack frame */
-	for (int i = 0; i < 31; i++) {
-		ssp->x[i] = 0;
+	sp = (UW64*)stack_top;
+
+	/* Reserve space for stack frame (280 bytes = 35 * 8) */
+	sp -= 35;
+
+	/* Initialize all to zero */
+	for (int i = 0; i < 35; i++) {
+		sp[i] = 0;
 	}
 
-	/* Set up task entry point */
-	ssp->pc = (UW64)task;
+	/* Set up SPSR (offset 0) */
+	/* SPSR: EL1h mode (0x5), IRQ/FIQ masked initially */
+	sp[0] = 0x000000C5;		/* SPSR */
+	sp[1] = 0;			/* padding */
 
-	/* Set up stack pointer (point below the SStackFrame) */
-	ssp->sp = (UW64)ssp;
+	/* Set up PC (ELR_EL1) at offset 16 */
+	sp[2] = 0;			/* X30 (LR) = 0 */
+	sp[3] = (UW64)task;		/* ELR_EL1 = task entry point */
 
-	/* SPSR: EL1h mode (0x5), IRQ/FIQ enabled (I=0, F=0) */
-	ssp->spsr = 0x00000005;		/* EL1h with SP_EL1 */
+	/* X0-X30 are already zero from initialization */
+	/* SP field (offset 31*8 = 248) will be ignored for EL1h tasks */
 
-	ssp->taskmode = 0;
-
-	/* Save context pointer */
-	tcb->tskctxb.ssp = ssp;
+	/* Save context pointer (points to SPSR) */
+	tcb->tskctxb.ssp = (void*)sp;
 }
 
 /* Create a task */
