@@ -169,6 +169,32 @@ irq_handler:
 	SAVE_CONTEXT
 	mov	x0, sp
 	bl	irq_exception_handler
+
+	/* Check if task switch is needed */
+	ldr	x0, =ctxtsk
+	ldr	x1, =schedtsk
+	ldr	x2, [x0]		/* x2 = ctxtsk */
+	ldr	x3, [x1]		/* x3 = schedtsk */
+	cmp	x2, x3
+	b.eq	irq_no_switch		/* If ctxtsk == schedtsk, no switch needed */
+
+	/* Task switch needed */
+	/* Save current task context if ctxtsk != NULL */
+	cbz	x2, irq_load_new	/* If ctxtsk == NULL, skip save */
+
+	/* Save SP to ctxtsk->tskctxb.ssp */
+	mov	x4, sp
+	str	x4, [x2, #TCB_tskctxb + CTXB_ssp]
+
+irq_load_new:
+	/* Switch to new task: ctxtsk = schedtsk */
+	str	x3, [x0]		/* ctxtsk = schedtsk */
+
+	/* Load SP from schedtsk->tskctxb.ssp */
+	ldr	x4, [x3, #TCB_tskctxb + CTXB_ssp]
+	mov	sp, x4
+
+irq_no_switch:
 	RESTORE_CONTEXT
 	eret
 
