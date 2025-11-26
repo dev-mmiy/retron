@@ -26,10 +26,11 @@ typedef int			INT;
 typedef int			ER;
 typedef int			ID;
 typedef unsigned long long	UD;
-typedef void			(*FP)(INT, void*);
+
+/* Task entry point function type */
+typedef void (*TASK_FP)(INT, void*);
 
 #define E_OK			0
-#define NULL			((void*)0)
 
 /* Timer counter */
 extern UW timer_freq;		/* Timer frequency (defined in icrt0.S) */
@@ -69,7 +70,7 @@ typedef struct {
 typedef struct {
 	ID	tskid;		/* Task ID */
 	TSTAT	state;		/* Task state */
-	FP	task;		/* Task entry point */
+	TASK_FP	task;		/* Task entry point */
 	void	*exinf;		/* Extended information */
 	INT	priority;	/* Priority (not used yet) */
 	void	*stack;		/* Stack area */
@@ -106,7 +107,7 @@ extern void dispatch_to_schedtsk(void);
  */
 
 /* Initialize task context */
-static void setup_task_context(TCB *tcb, FP task, void *stack, INT stksz)
+static void setup_task_context(TCB *tcb, TASK_FP task, void *stack, INT stksz)
 {
 	SStackFrame *ssp;
 
@@ -131,7 +132,7 @@ static void setup_task_context(TCB *tcb, FP task, void *stack, INT stksz)
 }
 
 /* Create a task */
-static ER create_task(INT idx, ID tskid, FP task, void *stack, INT stksz)
+static ER create_task(INT idx, ID tskid, TASK_FP task, void *stack, INT stksz)
 {
 	TCB *tcb;
 
