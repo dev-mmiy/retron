@@ -21,15 +21,230 @@
 
 /* Simple type definitions for standalone build */
 typedef unsigned int		UW;
+typedef unsigned long		UW64;
 typedef int			INT;
 typedef int			ER;
+typedef int			ID;
 typedef unsigned long long	UD;
+typedef void			(*FP)(INT, void*);
 
 #define E_OK			0
+#define NULL			((void*)0)
 
 /* Timer counter */
 extern UW timer_freq;		/* Timer frequency (defined in icrt0.S) */
 static volatile UD timer_tick_count = 0;	/* Timer tick counter */
+
+/*
+ * Task state
+ */
+typedef enum {
+	TS_NONEXIST	= 0,	/* Non-existent */
+	TS_DORMANT	= 1,	/* Dormant */
+	TS_READY	= 2,	/* Ready */
+	TS_RUN		= 3	/* Running */
+} TSTAT;
+
+/*
+ * Task context (minimal version)
+ */
+typedef struct {
+	void	*ssp;		/* System stack pointer */
+} CTXB;
+
+/*
+ * Stack frame for task (from cpu_task.h)
+ */
+typedef struct {
+	UW64	x[31];		/* X0-X30 */
+	UW64	sp;
+	UW64	pc;
+	UW64	spsr;
+	UW64	taskmode;
+} SStackFrame;
+
+/*
+ * Task Control Block (simplified)
+ */
+typedef struct {
+	ID	tskid;		/* Task ID */
+	TSTAT	state;		/* Task state */
+	FP	task;		/* Task entry point */
+	void	*exinf;		/* Extended information */
+	INT	priority;	/* Priority (not used yet) */
+	void	*stack;		/* Stack area */
+	INT	stksz;		/* Stack size */
+	CTXB	tskctxb;	/* Task context */
+	void	*isstack;	/* Initial system stack pointer */
+} TCB;
+
+/*
+ * Task management
+ */
+#define MAX_TASKS	3
+static TCB task_table[MAX_TASKS];
+extern void *ctxtsk;			/* Current task (defined in kernel_stubs.c) */
+extern void *schedtsk;			/* Task to be scheduled (defined in kernel_stubs.c) */
+static INT current_task_idx = -1;	/* Current task index */
+static INT task_switch_interval = 100;	/* Switch tasks every 100ms (100 ticks) */
+
+/* Task stacks (1KB each) */
+#define TASK_STACK_SIZE	1024
+static UW64 task1_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(16)));
+static UW64 task2_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(16)));
+static UW64 idle_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(16)));
+
+/* Forward declarations */
+static void uart_puts(const char *s);
+static void uart_puthex(UW val);
+
+/* External dispatcher function (from cpu_support.S) */
+extern void dispatch_to_schedtsk(void);
+
+/*
+ * Task management functions
+ */
+
+/* Initialize task context */
+static void setup_task_context(TCB *tcb, FP task, void *stack, INT stksz)
+{
+	SStackFrame *ssp;
+
+	/* Set up initial stack pointer (top of stack) */
+	tcb->isstack = (void*)((UW64)stack + stksz);
+
+	/* Reserve space for SStackFrame at top of stack */
+	ssp = (SStackFrame*)tcb->isstack;
+	ssp--;
+
+	/* Initialize stack frame */
+	for (int i = 0; i < 31; i++) {
+		ssp->x[i] = 0;
+	}
+	ssp->pc = (UW64)task;		/* Task entry point */
+	ssp->sp = 0;			/* Not used for kernel tasks */
+	ssp->spsr = 0x00000004;		/* EL1h, interrupts enabled */
+	ssp->taskmode = 0;
+
+	/* Save context */
+	tcb->tskctxb.ssp = ssp;
+}
+
+/* Create a task */
+static ER create_task(INT idx, ID tskid, FP task, void *stack, INT stksz)
+{
+	TCB *tcb;
+
+	if (idx >= MAX_TASKS) {
+		return -1;
+	}
+
+	tcb = &task_table[idx];
+	tcb->tskid = tskid;
+	tcb->state = TS_DORMANT;
+	tcb->task = task;
+	tcb->exinf = NULL;
+	tcb->priority = 1;
+	tcb->stack = stack;
+	tcb->stksz = stksz;
+
+	setup_task_context(tcb, task, stack, stksz);
+
+	return E_OK;
+}
+
+/* Start a task */
+static ER start_task(INT idx)
+{
+	TCB *tcb;
+
+	if (idx >= MAX_TASKS) {
+		return -1;
+	}
+
+	tcb = &task_table[idx];
+	if (tcb->state != TS_DORMANT) {
+		return -1;
+	}
+
+	tcb->state = TS_READY;
+
+	/* If this is the first task, make it the scheduled task */
+	if (schedtsk == NULL) {
+		schedtsk = (void*)tcb;
+	}
+
+	return E_OK;
+}
+
+/* Simple round-robin scheduler */
+static void schedule(void)
+{
+	INT i, next_idx;
+	TCB *next_task = NULL;
+
+	/* Find next READY task */
+	next_idx = current_task_idx + 1;
+	for (i = 0; i < MAX_TASKS; i++) {
+		if (next_idx >= MAX_TASKS) {
+			next_idx = 0;
+		}
+
+		if (task_table[next_idx].state == TS_READY) {
+			next_task = &task_table[next_idx];
+			current_task_idx = next_idx;
+			break;
+		}
+		next_idx++;
+	}
+
+	/* Set scheduled task */
+	if (next_task != NULL) {
+		schedtsk = (void*)next_task;
+	}
+}
+
+/*
+ * Demo task functions
+ */
+static void task1_main(INT stacd, void *exinf)
+{
+	(void)stacd;
+	(void)exinf;
+
+	while (1) {
+		uart_puts("[Task1] Running...\n");
+
+		/* Busy wait */
+		for (volatile int i = 0; i < 1000000; i++);
+	}
+}
+
+static void task2_main(INT stacd, void *exinf)
+{
+	(void)stacd;
+	(void)exinf;
+
+	while (1) {
+		uart_puts("[Task2] Running...\n");
+
+		/* Busy wait */
+		for (volatile int i = 0; i < 1000000; i++);
+	}
+}
+
+static void idle_task_main(INT stacd, void *exinf)
+{
+	(void)stacd;
+	(void)exinf;
+
+	while (1) {
+		uart_puts("[Idle] Running...\n");
+
+		/* Wait for interrupt */
+		__asm__ volatile("wfi");
+	}
+}
 
 /*
  * UART output functions
@@ -147,8 +362,32 @@ void kernel_main(void)
 	uart_puts("IRQ enabled.\n");
 	uart_puts("\n");
 
-	/* Main loop - in a real system, this would start the scheduler */
-	uart_puts("Entering idle loop...\n");
+	/* Initialize tasks */
+	uart_puts("Creating tasks...\n");
+	create_task(0, 1, task1_main, task1_stack, TASK_STACK_SIZE);
+	create_task(1, 2, task2_main, task2_stack, TASK_STACK_SIZE);
+	create_task(2, 3, idle_task_main, idle_stack, TASK_STACK_SIZE);
+
+	uart_puts("Starting tasks...\n");
+	start_task(0);
+	start_task(1);
+	start_task(2);
+
+	uart_puts("Tasks created and started.\n");
+	uart_puts("Task switching interval: ");
+	uart_puthex(task_switch_interval);
+	uart_puts(" ms\n");
+	uart_puts("\n");
+
+	/* Start multitasking by dispatching to first task */
+	uart_puts("Starting multitasking...\n");
+	uart_puts("\n");
+
+	/* This will switch to the first ready task and never return */
+	dispatch_to_schedtsk();
+
+	/* Should never reach here */
+	uart_puts("ERROR: Returned from dispatcher!\n");
 	for (;;) {
 		__asm__ volatile("wfi");
 	}
@@ -167,6 +406,11 @@ void timer_handler(void)
 		uart_puts("Timer tick: ");
 		uart_puthex((UW)(timer_tick_count / 1000));
 		uart_puts(" seconds\n");
+	}
+
+	/* Task switching: schedule next task every task_switch_interval ticks */
+	if ((timer_tick_count % task_switch_interval) == 0) {
+		schedule();
 	}
 
 	/* Clear timer interrupt and rearm for next period */
