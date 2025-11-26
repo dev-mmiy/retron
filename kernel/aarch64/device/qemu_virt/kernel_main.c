@@ -137,8 +137,8 @@ static void setup_task_context(TCB *tcb, TASK_FP task, void *stack, INT stksz)
 	}
 
 	/* Set up SPSR (offset 0) */
-	/* SPSR: EL1h mode (0x5), IRQ/FIQ masked initially */
-	sp[0] = 0x000000C5;		/* SPSR */
+	/* SPSR: EL1h mode (0x5), IRQ/FIQ enabled (I=0, F=0) */
+	sp[0] = 0x00000005;		/* SPSR: EL1h with interrupts enabled */
 	sp[1] = 0;			/* padding */
 
 	/* Set up PC (ELR_EL1) at offset 16 */
