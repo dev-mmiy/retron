@@ -9,15 +9,17 @@
 このドキュメントでは、ReTron OSの開発進捗を記録・管理します。
 各フェーズの進捗状況、完了した作業、課題、次のステップを記録します。
 
-**最終更新日**: 2024-11-24 (Phase 2.1: タイマー割り込み実装完了)
+**最終更新日**: 2025-11-27 (Phase 2.2: タスク管理実装完了)
 
 ---
 
-## 🎉 最新マイルストーン達成 (2024-11-24)
+## 🎉 最新マイルストーン達成 (2025-11-27)
 
-### AArch64 T-Kernel "Hello World" 達成！
+### プリエンプティブマルチタスク動作確認！
 
-QEMU virt マシン上でT-Kernel/AArch64が正常に起動し、UART経由でHello Worldを出力することに成功しました。
+QEMU virt マシン上でタイマー割り込みベースのプリエンプティブマルチタスクが正常に動作し、複数のタスクが自動的に切り替わることを確認しました。
+
+Phase 2の優先度高タスクのうち2つ（タイマー割り込み、タスク管理）が完了し、ReTron OSの基本的なカーネル機能が揃いました。
 
 ```
 ========================================
@@ -33,6 +35,29 @@ CPU ID (MIDR_EL1): 0x410FD034
 
 T-Kernel initialization complete.
 System ready.
+
+Starting timer interrupts (1ms period)...
+Timer started.
+
+Enabling IRQ interrupts...
+IRQ enabled.
+
+Creating tasks...
+Starting tasks...
+Tasks created and started.
+Task switching interval: 0x00000064 ms
+
+Starting multitasking...
+
+[Task1] Running...
+[Task2] Running...
+Timer tick: 0x00000001 seconds
+[Idle] Running...
+[Task1] Running...
+[Task2] Running...
+Timer tick: 0x00000002 seconds
+[Idle] Running...
+...
 ```
 
 ### 作成したファイル
@@ -111,10 +136,75 @@ make run
 
 ### 次のステップ
 
-Phase 2.2: タスク管理の実装
-- TCB (Task Control Block) の実装
-- tk_cre_tsk, tk_sta_tsk システムコール
-- タスクスケジューラとコンテキストスイッチ
+~~Phase 2.2: タスク管理の実装~~ → 完了 (2025-11-27)
+
+---
+
+## 🎉 Phase 2.2: タスク管理実装完了 (2025-11-27)
+
+### 実装内容
+
+プリエンプティブマルチタスクシステムを実装しました。タイマー割り込みベースのラウンドロビンスケジューリングにより、複数のタスクが自動的に切り替わります。
+
+**主な変更**:
+- `kernel_main.c`: TCB構造体、タスク作成・起動、ラウンドロビンスケジューラを実装
+- `offset.h`: 簡略化されたTCBレイアウトに合わせてオフセットを更新
+- `cpu_support.S`: IRQハンドラにタスク切り替えロジックを追加
+
+**実装機能**:
+- ✅ TCB (Task Control Block) 構造体の実装
+- ✅ タスク作成 (`create_task`) とタスク起動 (`start_task`) 機能
+- ✅ 簡易ラウンドロビンスケジューラ
+- ✅ タイマー割り込みによるプリエンプティブタスク切り替え (100ms間隔)
+- ✅ コンテキストスイッチング (IRQハンドラでctxtsk/schedtsk管理)
+- ✅ 3つのデモタスク (Task1, Task2, Idle)
+- ✅ EL1hモードでの割り込み有効化 (SPSR = 0x05)
+
+**期待される出力**:
+```
+Starting multitasking...
+
+[Task1] Running...
+[Task2] Running...
+Timer tick: 0x00000001 seconds
+[Idle] Running...
+[Task1] Running...
+[Task2] Running...
+Timer tick: 0x00000002 seconds
+...
+```
+
+**技術的なハイライト**:
+1. **スタックフレームレイアウト**: RESTORE_CONTEXT マクロと完全に一致するようにタスク初期化時のスタックを構築
+2. **SPSRの正確な設定**: 割り込みを有効にするため SPSR = 0x00000005 (EL1h, IRQ/FIQ有効)
+3. **IRQ時のタスク切り替え**: `ctxtsk != schedtsk` をチェックし、必要に応じてコンテキストを切り替え
+4. **TCBオフセットの整合性**: offset.h の定義が C 構造体のレイアウトと正確に一致
+
+### ビルド・テスト方法
+
+```bash
+cd kernel/aarch64/device/qemu_virt
+make clean && make
+make run
+```
+
+### 解決した課題
+
+実装中に以下の課題を解決しました:
+
+1. **型の競合**: `FP` 型が types.h と競合 → `TASK_FP` に改名
+2. **TCBオフセットの不一致**: offset.h を簡略化されたTCB構造に合わせて更新
+3. **スタックフレームレイアウト**: RESTORE_CONTEXT の期待形式に完全一致させる
+4. **割り込みマスク**: SPSR を 0xC5 から 0x05 に変更し、タスク内で割り込みを有効化
+5. **タスク切り替えロジック**: IRQハンドラにコンテキストスイッチングコードを追加
+
+### 次のステップ
+
+Phase 2.3: メモリ管理の実装
+- MMU (Memory Management Unit) 設定
+- ページテーブル構築
+- 仮想メモリサポート
+- タスクアドレス空間の分離
 
 ---
 
@@ -126,7 +216,7 @@ Phase 2.2: タスク管理の実装
 |---------|------|--------|--------|--------|------|
 | Phase 0: 準備・設計 | 🟢 完了 | 100% | - | 2024-11 | 要件定義・アーキテクチャ設計完了 |
 | Phase 1: 基盤構築 | 🟢 完了 | 100% | - | 2024-11-24 | AArch64カーネル起動、Hello World達成 |
-| Phase 2: カーネル機能拡張 | 🟡 進行中 | 11% | 2024-11-24 | - | タイマー割り込み完了 |
+| Phase 2: カーネル機能拡張 | 🟡 進行中 | 67% | 2024-11-24 | - | タイマー割り込み・タスク管理完了 |
 | Phase 3: システムサービス開発 | 🔵 未着手 | 0% | - | - | - |
 | Phase 4: デバイスドライバ開発 | 🔵 未着手 | 0% | - | - | - |
 | Phase 5: UI層開発 | 🔵 未着手 | 0% | - | - | - |
@@ -157,7 +247,7 @@ Phase 2.2: タスク管理の実装
 | # | 機能 | 説明 | 難易度 | 状態 |
 |---|------|------|--------|------|
 | 1 | タイマー割り込み | ARM Generic Timer で定期割り込み | ★★☆ | 🟢 完了 (2024-11-24) |
-| 2 | タスク管理 | tk_cre_tsk, tk_sta_tsk でマルチタスク | ★★★ | 🔵 未着手 |
+| 2 | タスク管理 | tk_cre_tsk, tk_sta_tsk でマルチタスク | ★★★ | 🟢 完了 (2025-11-27) |
 | 3 | メモリ管理 | MMU設定、ページテーブル | ★★★ | 🔵 未着手 |
 
 ### 優先度中（拡張機能）
