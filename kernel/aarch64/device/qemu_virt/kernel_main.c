@@ -114,6 +114,26 @@ static INT next_semid = 1;	/* Next semaphore ID to allocate */
 /* Shared semaphore for demo */
 static ID demo_sem = 0;	/* Will be initialized in kernel_main */
 
+/*
+ * Mutex Control Block
+ */
+typedef struct {
+	ID	mtxid;		/* Mutex ID */
+	INT	locked;		/* Lock state: 0=unlocked, 1=locked */
+	TCB	*owner;		/* Task that owns the mutex */
+	TCB	*wait_queue;	/* Queue of waiting tasks */
+} MTXCB;
+
+/*
+ * Mutex management
+ */
+#define MAX_MUTEXES	4
+static MTXCB mutex_table[MAX_MUTEXES];
+static INT next_mtxid = 1;	/* Next mutex ID to allocate */
+
+/* Shared mutex for demo */
+static ID demo_mtx = 0;		/* Will be initialized in kernel_main */
+
 /* Task stacks (1KB each) */
 #define TASK_STACK_SIZE	1024
 static UW64 task1_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(16)));
@@ -335,6 +355,9 @@ static void schedule(void)
 #define SVC_CRE_SEM		5	/* Create semaphore */
 #define SVC_SIG_SEM		6	/* Signal semaphore */
 #define SVC_WAI_SEM		7	/* Wait semaphore */
+#define SVC_CRE_MTX		8	/* Create mutex */
+#define SVC_LOC_MTX		9	/* Lock mutex */
+#define SVC_UNL_MTX		10	/* Unlock mutex */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -553,6 +576,168 @@ static ER svc_wai_sem(SVC_REGS *regs)
 }
 
 /*
+ * System call: Create mutex
+ * Input: none
+ * Output: x0 = mutex ID or error (-1)
+ */
+static ER svc_cre_mtx(SVC_REGS *regs)
+{
+	INT i;
+
+	/* Find free mutex slot */
+	for (i = 0; i < MAX_MUTEXES; i++) {
+		if (mutex_table[i].mtxid == 0) {
+			/* Initialize mutex */
+			mutex_table[i].mtxid = next_mtxid++;
+			mutex_table[i].locked = 0;
+			mutex_table[i].owner = NULL;
+			mutex_table[i].wait_queue = NULL;
+
+			regs->x0 = mutex_table[i].mtxid;
+			return E_OK;
+		}
+	}
+
+	/* No free slots */
+	regs->x0 = -1;
+	return -1;
+}
+
+/*
+ * System call: Lock mutex (acquire)
+ * Input: x0 = mutex ID
+ * Output: x0 = E_OK or error
+ */
+static ER svc_loc_mtx(SVC_REGS *regs)
+{
+	ID mtxid = (ID)regs->x0;
+	MTXCB *mtx = NULL;
+	TCB *current;
+	TCB **queue_ptr;
+	INT i;
+
+	/* Find mutex */
+	for (i = 0; i < MAX_MUTEXES; i++) {
+		if (mutex_table[i].mtxid == mtxid) {
+			mtx = &mutex_table[i];
+			break;
+		}
+	}
+
+	if (mtx == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	current = (TCB *)ctxtsk;
+	if (current == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Check if mutex is available */
+	if (mtx->locked == 0) {
+		/* Mutex available, lock it */
+		mtx->locked = 1;
+		mtx->owner = current;
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* Mutex is locked */
+	/* Check if current task already owns it (recursive lock - not allowed) */
+	if (mtx->owner == current) {
+		regs->x0 = -1;  /* Error: recursive lock not supported */
+		return -1;
+	}
+
+	/* Mutex is locked by another task, add to wait queue */
+	current->state = TS_WAIT;
+	current->wait_next = NULL;
+	current->wait_obj = mtx;
+
+	if (mtx->wait_queue == NULL) {
+		mtx->wait_queue = current;
+	} else {
+		/* Find end of queue */
+		queue_ptr = &mtx->wait_queue;
+		while (*queue_ptr != NULL && (*queue_ptr)->wait_next != NULL) {
+			queue_ptr = &((*queue_ptr)->wait_next);
+		}
+		(*queue_ptr)->wait_next = current;
+	}
+
+	/* TODO: Priority inheritance - boost owner's priority if needed */
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Unlock mutex (release)
+ * Input: x0 = mutex ID
+ * Output: x0 = E_OK or error
+ */
+static ER svc_unl_mtx(SVC_REGS *regs)
+{
+	ID mtxid = (ID)regs->x0;
+	MTXCB *mtx = NULL;
+	TCB *current;
+	TCB *waiting_task;
+	INT i;
+
+	/* Find mutex */
+	for (i = 0; i < MAX_MUTEXES; i++) {
+		if (mutex_table[i].mtxid == mtxid) {
+			mtx = &mutex_table[i];
+			break;
+		}
+	}
+
+	if (mtx == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	current = (TCB *)ctxtsk;
+	if (current == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Check if current task owns the mutex */
+	if (mtx->owner != current) {
+		regs->x0 = -1;  /* Error: task doesn't own this mutex */
+		return -1;
+	}
+
+	/* Check if any task is waiting */
+	if (mtx->wait_queue != NULL) {
+		/* Wake up first waiting task and transfer ownership */
+		waiting_task = mtx->wait_queue;
+		mtx->wait_queue = waiting_task->wait_next;
+
+		/* Transfer ownership to waiting task */
+		mtx->owner = waiting_task;
+		mtx->locked = 1;  /* Keep locked, new owner now owns it */
+
+		/* Change task state to READY */
+		waiting_task->state = TS_READY;
+		waiting_task->wait_next = NULL;
+		waiting_task->wait_obj = NULL;
+	} else {
+		/* No waiting tasks, unlock mutex */
+		mtx->locked = 0;
+		mtx->owner = NULL;
+	}
+
+	/* TODO: Priority inheritance - restore original priority if needed */
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
  * System call handler (called from assembly)
  * x0 = SVC number
  * x1 = pointer to saved register context
@@ -580,6 +765,15 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 		break;
 	case SVC_WAI_SEM:
 		svc_wai_sem(regs);
+		break;
+	case SVC_CRE_MTX:
+		svc_cre_mtx(regs);
+		break;
+	case SVC_LOC_MTX:
+		svc_loc_mtx(regs);
+		break;
+	case SVC_UNL_MTX:
+		svc_unl_mtx(regs);
 		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
@@ -666,6 +860,45 @@ static inline ER tk_wai_sem(ID semid)
 		"svc %1"
 		: "+r"(ret)
 		: "i"(SVC_WAI_SEM)
+		: "memory"
+	);
+	return (ER)ret;
+}
+
+/* Create mutex */
+static inline ID tk_cre_mtx(void)
+{
+	register UW64 ret __asm__("x0");
+	__asm__ volatile(
+		"svc %1"
+		: "=r"(ret)
+		: "i"(SVC_CRE_MTX)
+		: "memory"
+	);
+	return (ID)ret;
+}
+
+/* Lock mutex (acquire) */
+static inline ER tk_loc_mtx(ID mtxid)
+{
+	register UW64 ret __asm__("x0") = mtxid;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(ret)
+		: "i"(SVC_LOC_MTX)
+		: "memory"
+	);
+	return (ER)ret;
+}
+
+/* Unlock mutex (release) */
+static inline ER tk_unl_mtx(ID mtxid)
+{
+	register UW64 ret __asm__("x0") = mtxid;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(ret)
+		: "i"(SVC_UNL_MTX)
 		: "memory"
 	);
 	return (ER)ret;
@@ -795,11 +1028,14 @@ static void init_mmu(void)
 /*
  * Demo task functions - Producer/Consumer with Semaphore
  */
+/* Shared resource protected by mutex */
+static volatile INT shared_counter = 0;
+
 static void task1_main(INT stacd, void *exinf)
 {
 	ID tid;
 	UW64 time;
-	INT count = 0;
+	INT local_value;
 
 	(void)stacd;
 	(void)exinf;
@@ -807,23 +1043,34 @@ static void task1_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	uart_puts("[Task1] Producer started\n");
+	uart_puts("[Task1] Started\n");
 
 	while (1) {
-		/* Produce an item (simulate work) */
-		for (volatile int i = 0; i < 500000; i++);
+		/* Lock mutex before accessing shared resource */
+		uart_puts("[Task1] Locking mutex...\n");
+		tk_loc_mtx(demo_mtx);
 
+		/* Critical section - access shared resource */
+		uart_puts("[Task1] Entered critical section\n");
 		time = tk_get_tim();
-		count++;
 
-		uart_puts("[Task1] Produced item #");
-		uart_puthex((UW)count);
+		/* Read, modify, write shared counter */
+		local_value = shared_counter;
+		for (volatile int i = 0; i < 100000; i++);  /* Simulate work */
+		shared_counter = local_value + 1;
+
+		uart_puts("[Task1] Counter=");
+		uart_puthex((UW)shared_counter);
 		uart_puts(" at ");
 		uart_puthex((UW)time);
 		uart_puts("ms\n");
 
-		/* Signal semaphore (increment resource count) */
-		tk_sig_sem(demo_sem);
+		/* Unlock mutex */
+		uart_puts("[Task1] Unlocking mutex\n");
+		tk_unl_mtx(demo_mtx);
+
+		/* Do some work outside critical section */
+		for (volatile int i = 0; i < 500000; i++);
 	}
 }
 
@@ -831,7 +1078,7 @@ static void task2_main(INT stacd, void *exinf)
 {
 	ID tid;
 	UW64 time;
-	INT count = 0;
+	INT local_value;
 
 	(void)stacd;
 	(void)exinf;
@@ -839,24 +1086,34 @@ static void task2_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	uart_puts("[Task2] Consumer started\n");
+	uart_puts("[Task2] Started\n");
 
 	while (1) {
-		/* Wait for an item to be available */
-		uart_puts("[Task2] Waiting for item...\n");
-		tk_wai_sem(demo_sem);
+		/* Lock mutex before accessing shared resource */
+		uart_puts("[Task2] Locking mutex...\n");
+		tk_loc_mtx(demo_mtx);
 
+		/* Critical section - access shared resource */
+		uart_puts("[Task2] Entered critical section\n");
 		time = tk_get_tim();
-		count++;
 
-		uart_puts("[Task2] Consumed item #");
-		uart_puthex((UW)count);
+		/* Read, modify, write shared counter */
+		local_value = shared_counter;
+		for (volatile int i = 0; i < 150000; i++);  /* Simulate work */
+		shared_counter = local_value + 10;
+
+		uart_puts("[Task2] Counter=");
+		uart_puthex((UW)shared_counter);
 		uart_puts(" at ");
 		uart_puthex((UW)time);
 		uart_puts("ms\n");
 
-		/* Consume the item (simulate work) */
-		for (volatile int i = 0; i < 1000000; i++);
+		/* Unlock mutex */
+		uart_puts("[Task2] Unlocking mutex\n");
+		tk_unl_mtx(demo_mtx);
+
+		/* Do some work outside critical section */
+		for (volatile int i = 0; i < 700000; i++);
 	}
 }
 
@@ -1005,6 +1262,18 @@ void kernel_main(void)
 	demo_sem = tk_cre_sem(0, 10);
 	uart_puts("Demo semaphore created: ID=");
 	uart_puthex((UW)demo_sem);
+	uart_puts("\n");
+
+	/* Initialize mutexes */
+	uart_puts("Initializing mutexes...\n");
+	for (INT i = 0; i < MAX_MUTEXES; i++) {
+		mutex_table[i].mtxid = 0;
+	}
+
+	/* Create demo mutex */
+	demo_mtx = tk_cre_mtx();
+	uart_puts("Demo mutex created: ID=");
+	uart_puthex((UW)demo_mtx);
 	uart_puts("\n\n");
 
 	/* Initialize tasks */
