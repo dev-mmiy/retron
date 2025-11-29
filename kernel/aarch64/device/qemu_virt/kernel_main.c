@@ -95,6 +95,76 @@ static UW64 task1_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(1
 static UW64 task2_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(16)));
 static UW64 idle_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(16)));
 
+/*
+ * MMU and Page Table Definitions
+ */
+
+/* Page table entry attributes */
+#define PTE_VALID		(1ULL << 0)	/* Valid entry */
+#define PTE_TABLE		(1ULL << 1)	/* Table descriptor (for L0-L2) */
+#define PTE_BLOCK		(0ULL << 1)	/* Block descriptor (for L1-L2) */
+#define PTE_PAGE		(1ULL << 1)	/* Page descriptor (for L3) */
+
+/* Block/Page attributes */
+#define PTE_ATTR_IDX(x)		((UW64)(x) << 2)	/* Memory attribute index */
+#define PTE_NS			(1ULL << 5)		/* Non-secure */
+#define PTE_AP_RW_EL1		(0ULL << 6)		/* Read/write, EL1 only */
+#define PTE_AP_RW_ALL		(1ULL << 6)		/* Read/write, all ELs */
+#define PTE_AP_RO_EL1		(2ULL << 6)		/* Read-only, EL1 only */
+#define PTE_AP_RO_ALL		(3ULL << 6)		/* Read-only, all ELs */
+#define PTE_SH_NONE		(0ULL << 8)		/* Non-shareable */
+#define PTE_SH_OUTER		(2ULL << 8)		/* Outer shareable */
+#define PTE_SH_INNER		(3ULL << 8)		/* Inner shareable */
+#define PTE_AF			(1ULL << 10)		/* Access flag */
+#define PTE_NG			(1ULL << 11)		/* Not global */
+#define PTE_PXN			(1ULL << 53)		/* Privileged execute never */
+#define PTE_UXN			(1ULL << 54)		/* Unprivileged execute never */
+
+/* Memory attribute indices (for MAIR_EL1) */
+#define MAIR_IDX_DEVICE_nGnRnE	0	/* Device memory, non-gathering, non-reordering, no early write ack */
+#define MAIR_IDX_NORMAL_NC	1	/* Normal memory, non-cacheable */
+#define MAIR_IDX_NORMAL		2	/* Normal memory, write-back cacheable */
+
+/* MAIR_EL1 attribute values */
+#define MAIR_DEVICE_nGnRnE	0x00	/* Device-nGnRnE */
+#define MAIR_NORMAL_NC		0x44	/* Normal, non-cacheable */
+#define MAIR_NORMAL		0xFF	/* Normal, write-back read/write-allocate */
+
+/* TCR_EL1 bits */
+#define TCR_T0SZ(x)		((UW64)(x) << 0)	/* Size offset for TTBR0_EL1 */
+#define TCR_IRGN0_WBWA		(1ULL << 8)		/* Inner write-back read-allocate write-allocate */
+#define TCR_ORGN0_WBWA		(1ULL << 10)		/* Outer write-back read-allocate write-allocate */
+#define TCR_SH0_INNER		(3ULL << 12)		/* Inner shareable */
+#define TCR_TG0_4KB		(0ULL << 14)		/* 4KB granule for TTBR0_EL1 */
+#define TCR_T1SZ(x)		((UW64)(x) << 16)	/* Size offset for TTBR1_EL1 */
+#define TCR_A1			(1ULL << 22)		/* ASID from TTBR1_EL1 */
+#define TCR_IRGN1_WBWA		(1ULL << 24)		/* Inner write-back read-allocate write-allocate */
+#define TCR_ORGN1_WBWA		(1ULL << 26)		/* Outer write-back read-allocate write-allocate */
+#define TCR_SH1_INNER		(3ULL << 28)		/* Inner shareable */
+#define TCR_TG1_4KB		(2ULL << 30)		/* 4KB granule for TTBR1_EL1 */
+#define TCR_IPS_1TB		(2ULL << 32)		/* Intermediate physical address size: 40 bits, 1TB */
+
+/* SCTLR_EL1 bits */
+#define SCTLR_M			(1ULL << 0)	/* MMU enable */
+#define SCTLR_C			(1ULL << 2)	/* Data cache enable */
+#define SCTLR_I			(1ULL << 12)	/* Instruction cache enable */
+
+/* Page table sizes and counts */
+#define PAGE_SIZE		4096
+#define PAGE_SHIFT		12
+#define L0_ENTRIES		512
+#define L1_ENTRIES		512
+#define L2_ENTRIES		512
+
+/* Page table entry type */
+typedef UW64 pte_t;
+
+/* Page tables (must be 4KB aligned) */
+static pte_t page_tables_l0[L0_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+static pte_t page_tables_l1[L1_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+static pte_t page_tables_l2_ram[L2_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+static pte_t page_tables_l2_dev[L2_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+
 /* Forward declarations */
 static void uart_puts(const char *s);
 static void uart_puthex(UW val);
@@ -224,6 +294,149 @@ static void schedule(void)
 	if (next_task != NULL) {
 		schedtsk = (void*)next_task;
 	}
+}
+
+/*
+ * MMU Setup Functions
+ */
+
+/*
+ * Setup page tables for identity mapping
+ * Maps:
+ *   - 0x00000000-0x0FFFFFFF (256MB): Device memory for peripherals
+ *   - 0x40000000-0x47FFFFFF (128MB): Normal cacheable memory for RAM
+ */
+static void setup_page_tables(void)
+{
+	INT i;
+	UW64 addr;
+
+	/* Clear all page tables */
+	for (i = 0; i < L0_ENTRIES; i++) {
+		page_tables_l0[i] = 0;
+	}
+	for (i = 0; i < L1_ENTRIES; i++) {
+		page_tables_l1[i] = 0;
+	}
+	for (i = 0; i < L2_ENTRIES; i++) {
+		page_tables_l2_ram[i] = 0;
+		page_tables_l2_dev[i] = 0;
+	}
+
+	/*
+	 * Level 0: Each entry covers 512GB
+	 * We only need entry 0 (0x0_00000000 - 0x7F_FFFFFFFF)
+	 */
+	page_tables_l0[0] = (UW64)page_tables_l1 | PTE_VALID | PTE_TABLE;
+
+	/*
+	 * Level 1: Each entry covers 1GB
+	 * Entry 0: 0x00000000-0x3FFFFFFF (1GB) - Device memory region
+	 * Entry 1: 0x40000000-0x7FFFFFFF (1GB) - RAM region
+	 */
+
+	/* Entry 0: Point to L2 table for device memory */
+	page_tables_l1[0] = (UW64)page_tables_l2_dev | PTE_VALID | PTE_TABLE;
+
+	/* Entry 1: Point to L2 table for RAM */
+	page_tables_l1[1] = (UW64)page_tables_l2_ram | PTE_VALID | PTE_TABLE;
+
+	/*
+	 * Level 2 for device memory (0x00000000-0x3FFFFFFF)
+	 * Each entry covers 2MB
+	 * Map first 256MB (0x00000000-0x0FFFFFFF) as device memory
+	 */
+	for (i = 0; i < 128; i++) {  /* 128 entries * 2MB = 256MB */
+		addr = (UW64)i * 0x200000;  /* 2MB blocks */
+		page_tables_l2_dev[i] = addr
+			| PTE_VALID
+			| PTE_BLOCK
+			| PTE_ATTR_IDX(MAIR_IDX_DEVICE_nGnRnE)
+			| PTE_AP_RW_EL1
+			| PTE_SH_OUTER
+			| PTE_AF
+			| PTE_PXN
+			| PTE_UXN;
+	}
+
+	/*
+	 * Level 2 for RAM (0x40000000-0x7FFFFFFF)
+	 * Each entry covers 2MB
+	 * Map 128MB (0x40000000-0x47FFFFFF) as normal cacheable memory
+	 */
+	for (i = 0; i < 64; i++) {  /* 64 entries * 2MB = 128MB */
+		addr = 0x40000000ULL + ((UW64)i * 0x200000);  /* 2MB blocks starting at 0x40000000 */
+		page_tables_l2_ram[i] = addr
+			| PTE_VALID
+			| PTE_BLOCK
+			| PTE_ATTR_IDX(MAIR_IDX_NORMAL)
+			| PTE_AP_RW_EL1
+			| PTE_SH_INNER
+			| PTE_AF;
+	}
+}
+
+/*
+ * Initialize and enable MMU
+ */
+static void init_mmu(void)
+{
+	UW64 mair, tcr, sctlr;
+
+	/* Setup page tables */
+	setup_page_tables();
+
+	/*
+	 * Configure MAIR_EL1 (Memory Attribute Indirection Register)
+	 * Define memory types for indices 0, 1, 2
+	 */
+	mair = ((UW64)MAIR_DEVICE_nGnRnE << (MAIR_IDX_DEVICE_nGnRnE * 8))
+	     | ((UW64)MAIR_NORMAL_NC << (MAIR_IDX_NORMAL_NC * 8))
+	     | ((UW64)MAIR_NORMAL << (MAIR_IDX_NORMAL * 8));
+
+	__asm__ volatile("msr mair_el1, %0" :: "r"(mair));
+
+	/*
+	 * Configure TCR_EL1 (Translation Control Register)
+	 * - T0SZ=25: 39-bit VA for TTBR0_EL1 (512GB)
+	 * - T1SZ=25: 39-bit VA for TTBR1_EL1 (512GB)
+	 * - TG0=4KB, TG1=4KB: 4KB granule
+	 * - IPS=40 bits (1TB physical address space)
+	 * - Shareable, cacheable attributes
+	 */
+	tcr = TCR_T0SZ(25)
+	    | TCR_IRGN0_WBWA
+	    | TCR_ORGN0_WBWA
+	    | TCR_SH0_INNER
+	    | TCR_TG0_4KB
+	    | TCR_T1SZ(25)
+	    | TCR_IRGN1_WBWA
+	    | TCR_ORGN1_WBWA
+	    | TCR_SH1_INNER
+	    | TCR_TG1_4KB
+	    | TCR_IPS_1TB;
+
+	__asm__ volatile("msr tcr_el1, %0" :: "r"(tcr));
+
+	/*
+	 * Set TTBR0_EL1 and TTBR1_EL1 to point to L0 page table
+	 * For simplicity, use same page table for both
+	 */
+	__asm__ volatile("msr ttbr0_el1, %0" :: "r"((UW64)page_tables_l0));
+	__asm__ volatile("msr ttbr1_el1, %0" :: "r"((UW64)page_tables_l0));
+
+	/* Instruction Synchronization Barrier */
+	__asm__ volatile("isb");
+
+	/*
+	 * Enable MMU, I-cache, and D-cache in SCTLR_EL1
+	 */
+	__asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+	sctlr |= SCTLR_M | SCTLR_C | SCTLR_I;
+	__asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr));
+
+	/* Instruction Synchronization Barrier */
+	__asm__ volatile("isb");
 }
 
 /*
@@ -366,8 +579,14 @@ void kernel_main(void)
 	uart_puts("CPU ID (MIDR_EL1): ");
 	uart_puthex(cnt);
 	uart_puts("\n");
-
 	uart_puts("\n");
+
+	/* Initialize MMU */
+	uart_puts("Initializing MMU...\n");
+	init_mmu();
+	uart_puts("MMU enabled (identity mapping with caches).\n");
+	uart_puts("\n");
+
 	uart_puts("T-Kernel initialization complete.\n");
 	uart_puts("System ready.\n");
 	uart_puts("\n");
