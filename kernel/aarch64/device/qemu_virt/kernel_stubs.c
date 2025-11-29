@@ -28,15 +28,7 @@ void *schedtsk = (void *)0;
 UW lowpow_discnt = 1;  /* Disable low power mode */
 
 /* Note: dispatch_disabled is defined in cpu_support.S */
-
-/*
- * Timer handler stub
- */
-void timer_handler(void)
-{
-    /* Timer handling would go here */
-    /* For now, just return */
-}
+/* Note: timer_handler is defined in kernel_main.c */
 
 /*
  * Low power mode stub

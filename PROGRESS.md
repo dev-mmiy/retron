@@ -1,7 +1,7 @@
 # ReTron OS - 開発進捗管理
 
-> **ドキュメント種別**: 進捗管理ドキュメント  
-> **対象読者**: プロジェクトマネージャー、開発リーダー、開発者  
+> **ドキュメント種別**: 進捗管理ドキュメント
+> **対象読者**: プロジェクトマネージャー、開発リーダー、開発者
 > **関連ドキュメント**: [docs/DEVELOPMENT_PROCESS.md](docs/DEVELOPMENT_PROCESS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/DEVELOPMENT_MILESTONES.md](docs/DEVELOPMENT_MILESTONES.md)
 
 ## 概要
@@ -9,7 +9,262 @@
 このドキュメントでは、ReTron OSの開発進捗を記録・管理します。
 各フェーズの進捗状況、完了した作業、課題、次のステップを記録します。
 
-**最終更新日**: 2024年（更新時に記入）
+**最終更新日**: 2025-11-29 (Phase 2.3: MMU実装完了)
+
+---
+
+## 🎉 最新マイルストーン達成 (2025-11-29)
+
+### MMU有効化成功！キャッシュ有効でフル機能動作！
+
+AArch64 MMUの実装に成功し、仮想メモリ管理が動作開始しました。CPU能力を自動検出してTCR_EL1を最適設定し、I-cache/D-cacheも有効化。
+
+**Phase 2の優先度高タスク3つすべて（タイマー割り込み、タスク管理、メモリ管理）が完了**し、ReTron OSの基盤カーネル機能が完成しました。
+
+```
+========================================
+  ReTron OS - T-Kernel 2.0 for AArch64
+  Running on QEMU virt machine
+========================================
+
+Hello World from T-Kernel!
+
+Timer frequency: 0x03B9ACA0 Hz
+Current EL: 0x00000001
+CPU ID (MIDR_EL1): 0x410FD034
+
+T-Kernel initialization complete.
+System ready.
+
+Starting timer interrupts (1ms period)...
+Timer started.
+
+Enabling IRQ interrupts...
+IRQ enabled.
+
+Creating tasks...
+Starting tasks...
+Tasks created and started.
+Task switching interval: 0x00000064 ms
+
+Starting multitasking...
+
+[Task1] Running...
+[Task2] Running...
+Timer tick: 0x00000001 seconds
+[Idle] Running...
+[Task1] Running...
+[Task2] Running...
+Timer tick: 0x00000002 seconds
+[Idle] Running...
+...
+```
+
+### 作成したファイル
+
+**CPU依存部** (`kernel/aarch64/cpu/`) - 10ファイル:
+- `cpu_conf.h` - CPU設定
+- `cpu_insn.h` - CPU命令（メモリバリア、割り込み制御）
+- `cpu_status.h` - CPUステータス、クリティカルセクション
+- `cpu_task.h` - タスク管理構造体
+- `cpu_support.S` - ディスパッチャ、例外ベクタ（アセンブリ）
+- `cpu_init.c` - CPU初期化
+- `cpu_calls.c` - システムコール
+- `cache.c` - キャッシュ操作
+- `chkplv.c` - 保護レベルチェック
+- `offset.h` - TCBオフセット定義
+
+**デバイス依存部** (`kernel/aarch64/device/qemu_virt/`) - 10ファイル:
+- `icrt0.S` - スタートアップコード
+- `kernel_main.c` - カーネルメイン
+- `kernel_stubs.c` - スタブ定義
+- `devinit.c` - デバイス初期化
+- `tkdev_init.c` - T-Kernel デバイス初期化
+- `tkdev_conf.h` - デバイス設定（UART、GIC）
+- `tkdev_timer.h` - タイマー設定
+- `types.h` - 型定義
+- `kernel.ld` - リンカスクリプト
+- `Makefile` - ビルド設定
+
+### ビルド・実行方法
+
+```bash
+cd kernel/aarch64/device/qemu_virt
+make clean && make
+make run
+```
+
+---
+
+## 🎉 Phase 2.1: タイマー割り込み実装完了 (2024-11-24)
+
+### 実装内容
+
+ARM Generic Timer を使用した定期タイマー割り込みを実装しました。これはPhase 2の最優先タスクであり、タスクスケジューラの基盤となります。
+
+**主な変更**:
+- `kernel_main.c`: タイマー割り込みハンドラと GIC 割り込み処理を実装
+- `kernel_stubs.c`: timer_handler() スタブを削除
+- `tkdev_timer.h`: スタンドアロンビルド対応（types.h使用）
+
+**実装機能**:
+- ✅ GICv2 割り込みコントローラ連携（IAR/EOIR）
+- ✅ 1ms周期のタイマー割り込み
+- ✅ タイマーティックカウンタ（1秒ごとにメッセージ出力）
+- ✅ 割り込みハンドラでのタイマー再武装（clear_hw_timer_interrupt）
+
+**期待される出力**:
+```
+Starting timer interrupts (1ms period)...
+Timer started.
+
+Entering idle loop...
+Timer tick: 0x00000001 seconds
+Timer tick: 0x00000002 seconds
+Timer tick: 0x00000003 seconds
+...
+```
+
+### ビルド・テスト方法
+
+WSL2環境で以下を実行:
+```bash
+cd ~/workspace/retron/kernel/aarch64/device/qemu_virt
+make clean && make
+make run
+```
+
+### 次のステップ
+
+~~Phase 2.2: タスク管理の実装~~ → 完了 (2025-11-27)
+
+---
+
+## 🎉 Phase 2.2: タスク管理実装完了 (2025-11-27)
+
+### 実装内容
+
+プリエンプティブマルチタスクシステムを実装しました。タイマー割り込みベースのラウンドロビンスケジューリングにより、複数のタスクが自動的に切り替わります。
+
+**主な変更**:
+- `kernel_main.c`: TCB構造体、タスク作成・起動、ラウンドロビンスケジューラを実装
+- `offset.h`: 簡略化されたTCBレイアウトに合わせてオフセットを更新
+- `cpu_support.S`: IRQハンドラにタスク切り替えロジックを追加
+
+**実装機能**:
+- ✅ TCB (Task Control Block) 構造体の実装
+- ✅ タスク作成 (`create_task`) とタスク起動 (`start_task`) 機能
+- ✅ 簡易ラウンドロビンスケジューラ
+- ✅ タイマー割り込みによるプリエンプティブタスク切り替え (100ms間隔)
+- ✅ コンテキストスイッチング (IRQハンドラでctxtsk/schedtsk管理)
+- ✅ 3つのデモタスク (Task1, Task2, Idle)
+- ✅ EL1hモードでの割り込み有効化 (SPSR = 0x05)
+
+**期待される出力**:
+```
+Starting multitasking...
+
+[Task1] Running...
+[Task2] Running...
+Timer tick: 0x00000001 seconds
+[Idle] Running...
+[Task1] Running...
+[Task2] Running...
+Timer tick: 0x00000002 seconds
+...
+```
+
+**技術的なハイライト**:
+1. **スタックフレームレイアウト**: RESTORE_CONTEXT マクロと完全に一致するようにタスク初期化時のスタックを構築
+2. **SPSRの正確な設定**: 割り込みを有効にするため SPSR = 0x00000005 (EL1h, IRQ/FIQ有効)
+3. **IRQ時のタスク切り替え**: `ctxtsk != schedtsk` をチェックし、必要に応じてコンテキストを切り替え
+4. **TCBオフセットの整合性**: offset.h の定義が C 構造体のレイアウトと正確に一致
+
+### ビルド・テスト方法
+
+```bash
+cd kernel/aarch64/device/qemu_virt
+make clean && make
+make run
+```
+
+### 解決した課題
+
+実装中に以下の課題を解決しました:
+
+1. **型の競合**: `FP` 型が types.h と競合 → `TASK_FP` に改名
+2. **TCBオフセットの不一致**: offset.h を簡略化されたTCB構造に合わせて更新
+3. **スタックフレームレイアウト**: RESTORE_CONTEXT の期待形式に完全一致させる
+4. **割り込みマスク**: SPSR を 0xC5 から 0x05 に変更し、タスク内で割り込みを有効化
+5. **タスク切り替えロジック**: IRQハンドラにコンテキストスイッチングコードを追加
+
+### 次のステップ
+
+~~Phase 2.3: メモリ管理の実装~~ → 完了 (2025-11-29)
+
+---
+
+## 🎉 Phase 2.3: MMU実装完了 (2025-11-29)
+
+### 実装内容
+
+AArch64 MMU (Memory Management Unit) を実装し、仮想メモリ管理を有効化しました。CPU能力を自動検出し、最適なTCR_EL1設定を行い、I-cache/D-cacheも有効化して性能を向上させました。
+
+**主な変更**:
+- `kernel_main.c`: MMU初期化、ページテーブル設定、CPU能力検出を実装
+
+**実装機能**:
+- ✅ CPU能力自動検出 (ID_AA64MMFR0_EL1読み取り)
+- ✅ 48ビットVA (T0SZ=16) - 標準的で広くサポート
+- ✅ 4KB granule ページテーブル
+- ✅ IPS設定を CPUの実際のPARange (40ビット) から自動設定
+- ✅ Level 0/1 ページテーブルで1GBブロックマッピング
+- ✅ アイデンティティマッピング (VA = PA)
+  - 0x00000000-0x3FFFFFFF: デバイスメモリ (UART, GIC等)
+  - 0x40000000-0x7FFFFFFF: 通常メモリ (RAM)
+- ✅ MAIR_EL1設定 (3種類のメモリ属性)
+- ✅ TLB無効化と適切な同期バリア
+- ✅ I-cache/D-cache有効化
+
+**期待される出力**:
+```
+CPU ID (MIDR_EL1): 0x410FD034
+
+MMU enabled with I-cache and D-cache.
+
+T-Kernel initialization complete.
+System ready.
+```
+
+**技術的なハイライト**:
+1. **CPU能力自動検出**: ID_AA64MMFR0_EL1から PARange を読み取り、IPS設定に反映
+2. **標準的なVA設定**: T0SZ=16 (48ビットVA) で広い互換性
+3. **シンプルなページテーブル**: L0/L1のみで1GBブロック使用
+4. **アイデンティティマッピング**: VA=PA で既存コードの変更不要
+5. **キャッシュ有効化**: 性能向上のため I-cache/D-cache を有効化
+
+### 解決した課題
+
+MMU有効化時のハングを以下の手順で解決:
+
+1. **TCR_EL1設定の問題**: T0SZ=25 (39ビット) から T0SZ=16 (48ビット) に変更
+2. **IPS設定の不一致**: 固定値 (IPS_1TB) からCPU実際のPARange (40ビット) に変更
+3. **ページテーブル複雑さ**: Level 2 の 2MBブロックから Level 1 の 1GBブロックに簡略化
+4. **同期バリア不足**: TLB無効化と DSB/ISB を適切に配置
+
+### ビルド・テスト方法
+
+```bash
+cd kernel/aarch64/device/qemu_virt
+make clean && make
+make run
+```
+
+### 次のステップ
+
+Phase 2の優先度高タスクがすべて完了しました。次は優先度中の拡張機能:
+- Phase 2.4: システムコール (SVC命令)
+- Phase 2.5: セマフォ/ミューテックス (同期プリミティブ)
 
 ---
 
@@ -19,9 +274,9 @@
 
 | フェーズ | 状態 | 進捗率 | 開始日 | 完了日 | 備考 |
 |---------|------|--------|--------|--------|------|
-| Phase 0: 準備・設計 | 🟡 進行中 | 60% | - | - | 要件定義書作成完了 |
-| Phase 1: 基盤構築 | 🟡 進行中 | 80% | - | - | ARMv8-A対応開始、CPU依存部基本実装・初期化・タスク管理・ディスパッチャ・オフセット定義・C関数実装・例外ハンドラ実装・UART/タイマードライバ・システム起動処理・ビルドシステム・リンカスクリプト・Hello World実装準備完了・すべてのライブラリビルド完了 |
-| Phase 2: カーネル機能拡張 | 🔵 未着手 | 0% | - | - | - |
+| Phase 0: 準備・設計 | 🟢 完了 | 100% | - | 2024-11 | 要件定義・アーキテクチャ設計完了 |
+| Phase 1: 基盤構築 | 🟢 完了 | 100% | - | 2024-11-24 | AArch64カーネル起動、Hello World達成 |
+| Phase 2: カーネル機能拡張 | 🟡 進行中 | 100% | 2024-11-24 | - | 優先度高3項目すべて完了（タイマー・タスク・MMU） |
 | Phase 3: システムサービス開発 | 🔵 未着手 | 0% | - | - | - |
 | Phase 4: デバイスドライバ開発 | 🔵 未着手 | 0% | - | - | - |
 | Phase 5: UI層開発 | 🔵 未着手 | 0% | - | - | - |
@@ -38,18 +293,52 @@
 
 ### 全体進捗率
 
-**全体進捗**: 7% (0/9 フェーズ完了、Phase 0進行中)
+**全体進捗**: 22% (2/9 フェーズ完了、Phase 2 進行中)
+
+---
+
+## Phase 2: カーネル機能拡張（次のステップ）
+
+**状態**: 🟡 進行中
+**開始日**: 2024-11-24
+
+### 優先度高（基盤機能）
+
+| # | 機能 | 説明 | 難易度 | 状態 |
+|---|------|------|--------|------|
+| 1 | タイマー割り込み | ARM Generic Timer で定期割り込み | ★★☆ | 🟢 完了 (2024-11-24) |
+| 2 | タスク管理 | tk_cre_tsk, tk_sta_tsk でマルチタスク | ★★★ | 🟢 完了 (2025-11-27) |
+| 3 | メモリ管理 | MMU設定、ページテーブル | ★★★ | 🟢 完了 (2025-11-29) |
+
+### 優先度中（拡張機能）
+
+| # | 機能 | 説明 | 難易度 | 状態 |
+|---|------|------|--------|------|
+| 4 | システムコール | SVC命令でカーネルAPI呼び出し | ★★☆ | 🔵 未着手 |
+| 5 | セマフォ/ミューテックス | 同期プリミティブ | ★★☆ | 🔵 未着手 |
+| 6 | Rust統合 | rust-tkernel-interface の接続 | ★★☆ | 🔵 未着手 |
+
+### 優先度低（応用）
+
+| # | 機能 | 説明 | 難易度 | 状態 |
+|---|------|------|--------|------|
+| 7 | 実機移植 | Raspberry Pi 4等へ | ★★★ | 🔵 未着手 |
+| 8 | VirtIOドライバ | ネットワーク/ブロックデバイス | ★★★ | 🔵 未着手 |
+| 9 | ファイルシステム | FAT/ext2サポート | ★★★ | 🔵 未着手 |
+
+### 推奨される次のアクション
+
+1. **タイマー割り込みの実装** - タスクスケジューラの基盤
+2. **タスク管理の実装** - マルチタスク動作
+3. **Rust FFI統合** - rust-tkernel-interface との接続
 
 ---
 
 ## Phase 0: 準備・設計フェーズ
 
-**期間**: 2-3ヶ月  
-**状態**: 🟡 進行中  
-**進捗率**: 85%  
-**開始日**: -  
-**完了予定日**: -  
-**実際の完了日**: -
+**期間**: 2-3ヶ月
+**状態**: 🟢 完了
+**進捗率**: 100%
 
 ### 作業項目
 

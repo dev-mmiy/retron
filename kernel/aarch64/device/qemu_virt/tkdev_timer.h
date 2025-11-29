@@ -21,9 +21,11 @@
 #ifndef _TKDEV_TIMER_
 #define _TKDEV_TIMER_
 
-#include <tk/syslib.h>
-#include <sys/sysinfo.h>
+#include "types.h"
 #include "tkdev_conf.h"
+
+/* External declaration */
+#define IMPORT extern
 
 /*
  * Timer configuration

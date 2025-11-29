@@ -43,15 +43,33 @@
 #define TCBSZ_GP	(0)		/* No global pointer support	*/
 
 /*----------------------------------------------------------------------*/
-/*	offset data in TCB						*/
+/*	offset data in TCB (simplified TCB layout for standalone kernel)	*/
 /*----------------------------------------------------------------------*/
-#define TCB_isstack	(TCB_wtmeb+TCBsz_wtmeb2istack)
-#define TCB_tskctxb	_ALIGN_CPU(TCB_isstack+8+TCBSZ_GP)
+/* Simplified TCB structure:
+ * typedef struct {
+ *   ID      tskid;       // offset 0, 4 bytes
+ *   TSTAT   state;       // offset 4, 4 bytes
+ *   TASK_FP task;        // offset 8, 8 bytes
+ *   void    *exinf;      // offset 16, 8 bytes
+ *   INT     priority;    // offset 24, 4 bytes
+ *   void    *stack;      // offset 32, 8 bytes (aligned)
+ *   INT     stksz;       // offset 40, 4 bytes
+ *   CTXB    tskctxb;     // offset 48, 8 bytes (aligned)
+ *   void    *isstack;    // offset 56, 8 bytes
+ * } TCB;
+ */
+#define TCB_tskid	0
+#define TCB_state	4
+#define TCB_task	8
+#define TCB_exinf	16
+#define TCB_priority	24
+#define TCB_stack	32
+#define TCB_stksz	40
+#define TCB_tskctxb	48
+#define TCB_isstack	56
 
-#define TCB_tskid	16
-#define TCB_tskatr	32
-#define TCB_state	86
-#define TCB_reqdct	72
+#define TCB_tskatr	32	/* Not used in simplified TCB */
+#define TCB_reqdct	72	/* Not used in simplified TCB */
 #define TA_FPU		0
 
 /*----------------------------------------------------------------------*/
