@@ -353,9 +353,9 @@ static ER svc_dly_tsk(SVC_REGS *regs)
 	UW64 dlytim = regs->x0;
 	UW64 start_tick = timer_tick_count;
 
-	/* Busy wait for now (simple implementation) */
+	/* Simple busy wait (don't use WFI in SVC handler - interrupts may not work correctly) */
 	while ((timer_tick_count - start_tick) < dlytim) {
-		__asm__ volatile("wfi");  /* Wait for interrupt */
+		/* Just spin - timer interrupts will update timer_tick_count */
 	}
 
 	regs->x0 = E_OK;
