@@ -583,10 +583,10 @@ void kernel_main(void)
 	uart_puts("\n");
 	uart_puts("\n");
 
-	/* Initialize MMU */
-	uart_puts("Initializing MMU...\n");
-	init_mmu();
-	uart_puts("MMU enabled (identity mapping with caches).\n");
+	/* Initialize MMU - TEMPORARILY DISABLED for debugging */
+	uart_puts("MMU initialization: SKIPPED (under development)\n");
+	// init_mmu();
+	// uart_puts("MMU enabled (identity mapping with caches).\n");
 	uart_puts("\n");
 
 	uart_puts("T-Kernel initialization complete.\n");
