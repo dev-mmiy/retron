@@ -43,7 +43,8 @@ typedef enum {
 	TS_NONEXIST	= 0,	/* Non-existent */
 	TS_DORMANT	= 1,	/* Dormant */
 	TS_READY	= 2,	/* Ready */
-	TS_RUN		= 3	/* Running */
+	TS_RUN		= 3,	/* Running */
+	TS_WAIT		= 4	/* Waiting */
 } TSTAT;
 
 /*
@@ -67,16 +68,20 @@ typedef struct {
 /*
  * Task Control Block (simplified)
  */
-typedef struct {
-	ID	tskid;		/* Task ID */
-	TSTAT	state;		/* Task state */
-	TASK_FP	task;		/* Task entry point */
-	void	*exinf;		/* Extended information */
-	INT	priority;	/* Priority (not used yet) */
-	void	*stack;		/* Stack area */
-	INT	stksz;		/* Stack size */
-	CTXB	tskctxb;	/* Task context */
-	void	*isstack;	/* Initial system stack pointer */
+typedef struct tcb {
+	ID		tskid;		/* Task ID */
+	TSTAT		state;		/* Task state */
+	TASK_FP		task;		/* Task entry point */
+	void		*exinf;		/* Extended information */
+	INT		priority;	/* Priority (not used yet) */
+	void		*stack;		/* Stack area */
+	INT		stksz;		/* Stack size */
+	CTXB		tskctxb;	/* Task context */
+	void		*isstack;	/* Initial system stack pointer */
+
+	/* Waiting information */
+	struct tcb	*wait_next;	/* Next task in wait queue */
+	void		*wait_obj;	/* Object being waited on (semaphore, etc.) */
 } TCB;
 
 /*
@@ -88,6 +93,26 @@ extern void *ctxtsk;			/* Current task (defined in kernel_stubs.c) */
 extern void *schedtsk;			/* Task to be scheduled (defined in kernel_stubs.c) */
 static INT current_task_idx = -1;	/* Current task index */
 static INT task_switch_interval = 100;	/* Switch tasks every 100ms (100 ticks) */
+
+/*
+ * Semaphore Control Block
+ */
+typedef struct {
+	ID	semid;		/* Semaphore ID */
+	INT	semcnt;		/* Semaphore counter */
+	INT	maxsem;		/* Maximum semaphore count */
+	TCB	*wait_queue;	/* Queue of waiting tasks */
+} SEMCB;
+
+/*
+ * Semaphore management
+ */
+#define MAX_SEMAPHORES	4
+static SEMCB semaphore_table[MAX_SEMAPHORES];
+static INT next_semid = 1;	/* Next semaphore ID to allocate */
+
+/* Shared semaphore for demo */
+static ID demo_sem = 0;	/* Will be initialized in kernel_main */
 
 /* Task stacks (1KB each) */
 #define TASK_STACK_SIZE	1024
@@ -239,6 +264,8 @@ static ER create_task(INT idx, ID tskid, TASK_FP task, void *stack, INT stksz)
 	tcb->priority = 1;
 	tcb->stack = stack;
 	tcb->stksz = stksz;
+	tcb->wait_next = NULL;
+	tcb->wait_obj = NULL;
 
 	setup_task_context(tcb, task, stack, stksz);
 
@@ -305,6 +332,9 @@ static void schedule(void)
 #define SVC_DLY_TSK		2	/* Task delay */
 #define SVC_GET_TIM		3	/* Get system time */
 #define SVC_EXT_TSK		4	/* Exit task */
+#define SVC_CRE_SEM		5	/* Create semaphore */
+#define SVC_SIG_SEM		6	/* Signal semaphore */
+#define SVC_WAI_SEM		7	/* Wait semaphore */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -384,6 +414,145 @@ static ER svc_ext_tsk(SVC_REGS *regs)
 }
 
 /*
+ * System call: Create semaphore
+ * Input: x0 = initial count, x1 = max count
+ * Output: x0 = semaphore ID (or negative error)
+ */
+static ER svc_cre_sem(SVC_REGS *regs)
+{
+	INT isemcnt = (INT)regs->x0;
+	INT maxsem = (INT)regs->x1;
+	INT i;
+
+	/* Find free semaphore slot */
+	for (i = 0; i < MAX_SEMAPHORES; i++) {
+		if (semaphore_table[i].semid == 0) {
+			/* Initialize semaphore */
+			semaphore_table[i].semid = next_semid++;
+			semaphore_table[i].semcnt = isemcnt;
+			semaphore_table[i].maxsem = maxsem;
+			semaphore_table[i].wait_queue = NULL;
+
+			regs->x0 = semaphore_table[i].semid;
+			return E_OK;
+		}
+	}
+
+	/* No free slots */
+	regs->x0 = -1;
+	return -1;
+}
+
+/*
+ * System call: Signal semaphore (release resource)
+ * Input: x0 = semaphore ID
+ * Output: x0 = E_OK or error
+ */
+static ER svc_sig_sem(SVC_REGS *regs)
+{
+	ID semid = (ID)regs->x0;
+	SEMCB *sem = NULL;
+	TCB *waiting_task;
+	INT i;
+
+	/* Find semaphore */
+	for (i = 0; i < MAX_SEMAPHORES; i++) {
+		if (semaphore_table[i].semid == semid) {
+			sem = &semaphore_table[i];
+			break;
+		}
+	}
+
+	if (sem == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Check if any task is waiting */
+	if (sem->wait_queue != NULL) {
+		/* Wake up first waiting task */
+		waiting_task = sem->wait_queue;
+		sem->wait_queue = waiting_task->wait_next;
+
+		/* Change task state to READY */
+		waiting_task->state = TS_READY;
+		waiting_task->wait_next = NULL;
+		waiting_task->wait_obj = NULL;
+	} else {
+		/* No waiting tasks, increment counter */
+		if (sem->semcnt < sem->maxsem) {
+			sem->semcnt++;
+		}
+	}
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Wait semaphore (acquire resource)
+ * Input: x0 = semaphore ID
+ * Output: x0 = E_OK or error
+ */
+static ER svc_wai_sem(SVC_REGS *regs)
+{
+	ID semid = (ID)regs->x0;
+	SEMCB *sem = NULL;
+	TCB *current;
+	TCB **queue_ptr;
+	INT i;
+
+	/* Find semaphore */
+	for (i = 0; i < MAX_SEMAPHORES; i++) {
+		if (semaphore_table[i].semid == semid) {
+			sem = &semaphore_table[i];
+			break;
+		}
+	}
+
+	if (sem == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Check if resource is available */
+	if (sem->semcnt > 0) {
+		/* Resource available, decrement counter */
+		sem->semcnt--;
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* No resource available, put task in wait queue */
+	current = (TCB *)ctxtsk;
+	if (current == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Add to end of wait queue */
+	current->state = TS_WAIT;
+	current->wait_next = NULL;
+	current->wait_obj = sem;
+
+	if (sem->wait_queue == NULL) {
+		sem->wait_queue = current;
+	} else {
+		/* Find end of queue */
+		queue_ptr = &sem->wait_queue;
+		while (*queue_ptr != NULL && (*queue_ptr)->wait_next != NULL) {
+			queue_ptr = &((*queue_ptr)->wait_next);
+		}
+		(*queue_ptr)->wait_next = current;
+	}
+
+	/* Force task switch - don't return E_OK yet */
+	/* Task will be woken up by sig_sem and will return E_OK then */
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
  * System call handler (called from assembly)
  * x0 = SVC number
  * x1 = pointer to saved register context
@@ -402,6 +571,15 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 		break;
 	case SVC_EXT_TSK:
 		svc_ext_tsk(regs);
+		break;
+	case SVC_CRE_SEM:
+		svc_cre_sem(regs);
+		break;
+	case SVC_SIG_SEM:
+		svc_sig_sem(regs);
+		break;
+	case SVC_WAI_SEM:
+		svc_wai_sem(regs);
 		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
@@ -451,6 +629,46 @@ static inline void tk_dly_tsk(UW64 dlytim)
 	while ((tk_get_tim() - start) < dlytim) {
 		/* Timer interrupts will update timer_tick_count */
 	}
+}
+
+/* Create semaphore */
+static inline ID tk_cre_sem(INT isemcnt, INT maxsem)
+{
+	register UW64 ret __asm__("x0") = isemcnt;
+	register UW64 max __asm__("x1") = maxsem;
+	__asm__ volatile(
+		"svc %2"
+		: "+r"(ret)
+		: "r"(max), "i"(SVC_CRE_SEM)
+		: "memory"
+	);
+	return (ID)ret;
+}
+
+/* Signal semaphore (release resource) */
+static inline ER tk_sig_sem(ID semid)
+{
+	register UW64 ret __asm__("x0") = semid;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(ret)
+		: "i"(SVC_SIG_SEM)
+		: "memory"
+	);
+	return (ER)ret;
+}
+
+/* Wait semaphore (acquire resource) */
+static inline ER tk_wai_sem(ID semid)
+{
+	register UW64 ret __asm__("x0") = semid;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(ret)
+		: "i"(SVC_WAI_SEM)
+		: "memory"
+	);
+	return (ER)ret;
 }
 
 /*
@@ -575,12 +793,13 @@ static void init_mmu(void)
 }
 
 /*
- * Demo task functions
+ * Demo task functions - Producer/Consumer with Semaphore
  */
 static void task1_main(INT stacd, void *exinf)
 {
 	ID tid;
 	UW64 time;
+	INT count = 0;
 
 	(void)stacd;
 	(void)exinf;
@@ -588,18 +807,23 @@ static void task1_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	while (1) {
-		/* Get current time using system call */
-		time = tk_get_tim();
+	uart_puts("[Task1] Producer started\n");
 
-		uart_puts("[Task1] TID=");
-		uart_puthex((UW)tid);
-		uart_puts(" Time=");
+	while (1) {
+		/* Produce an item (simulate work) */
+		for (volatile int i = 0; i < 500000; i++);
+
+		time = tk_get_tim();
+		count++;
+
+		uart_puts("[Task1] Produced item #");
+		uart_puthex((UW)count);
+		uart_puts(" at ");
 		uart_puthex((UW)time);
 		uart_puts("ms\n");
 
-		/* Short busy-wait to demonstrate system calls work */
-		for (volatile int i = 0; i < 500000; i++);
+		/* Signal semaphore (increment resource count) */
+		tk_sig_sem(demo_sem);
 	}
 }
 
@@ -607,6 +831,7 @@ static void task2_main(INT stacd, void *exinf)
 {
 	ID tid;
 	UW64 time;
+	INT count = 0;
 
 	(void)stacd;
 	(void)exinf;
@@ -614,17 +839,23 @@ static void task2_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	while (1) {
-		/* Get current time using system call */
-		time = tk_get_tim();
+	uart_puts("[Task2] Consumer started\n");
 
-		uart_puts("[Task2] TID=");
-		uart_puthex((UW)tid);
-		uart_puts(" Time=");
+	while (1) {
+		/* Wait for an item to be available */
+		uart_puts("[Task2] Waiting for item...\n");
+		tk_wai_sem(demo_sem);
+
+		time = tk_get_tim();
+		count++;
+
+		uart_puts("[Task2] Consumed item #");
+		uart_puthex((UW)count);
+		uart_puts(" at ");
 		uart_puthex((UW)time);
 		uart_puts("ms\n");
 
-		/* Short busy-wait to demonstrate system calls work */
+		/* Consume the item (simulate work) */
 		for (volatile int i = 0; i < 1000000; i++);
 	}
 }
@@ -763,6 +994,18 @@ void kernel_main(void)
 	__asm__ volatile("msr daifclr, #2");  // Clear IRQ mask (bit 1)
 	uart_puts("IRQ enabled.\n");
 	uart_puts("\n");
+
+	/* Initialize semaphores */
+	uart_puts("Initializing semaphores...\n");
+	for (INT i = 0; i < MAX_SEMAPHORES; i++) {
+		semaphore_table[i].semid = 0;
+	}
+
+	/* Create demo semaphore (initial count=0, max=10) */
+	demo_sem = tk_cre_sem(0, 10);
+	uart_puts("Demo semaphore created: ID=");
+	uart_puthex((UW)demo_sem);
+	uart_puts("\n\n");
 
 	/* Initialize tasks */
 	uart_puts("Creating tasks...\n");
