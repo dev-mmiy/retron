@@ -383,23 +383,27 @@ static void init_mmu(void)
 {
 	UW64 mair, tcr, sctlr;
 
+	uart_puts("  [1] Disabling MMU...\n");
 	/* Ensure MMU is disabled before configuring */
 	__asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
 	sctlr &= ~(SCTLR_M | SCTLR_C);  /* Disable MMU and D-cache */
 	__asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr));
 	__asm__ volatile("isb");
 
+	uart_puts("  [2] Invalidating TLB...\n");
 	/* Invalidate TLB */
 	__asm__ volatile("tlbi vmalle1");
 	__asm__ volatile("dsb sy");
 	__asm__ volatile("isb");
 
+	uart_puts("  [3] Setting up page tables...\n");
 	/* Setup page tables */
 	setup_page_tables();
 
 	/* Data Synchronization Barrier - ensure page tables are written */
 	__asm__ volatile("dsb sy");
 
+	uart_puts("  [4] Configuring MAIR_EL1...\n");
 	/*
 	 * Configure MAIR_EL1 (Memory Attribute Indirection Register)
 	 * Define memory types for indices 0, 1, 2
@@ -410,6 +414,7 @@ static void init_mmu(void)
 
 	__asm__ volatile("msr mair_el1, %0" :: "r"(mair));
 
+	uart_puts("  [5] Configuring TCR_EL1...\n");
 	/*
 	 * Configure TCR_EL1 (Translation Control Register)
 	 * - T0SZ=25: 39-bit VA for TTBR0_EL1 (512GB)
@@ -432,6 +437,7 @@ static void init_mmu(void)
 
 	__asm__ volatile("msr tcr_el1, %0" :: "r"(tcr));
 
+	uart_puts("  [6] Setting TTBR0/TTBR1...\n");
 	/*
 	 * Set TTBR0_EL1 and TTBR1_EL1 to point to L0 page table
 	 * For simplicity, use same page table for both
@@ -439,20 +445,24 @@ static void init_mmu(void)
 	__asm__ volatile("msr ttbr0_el1, %0" :: "r"((UW64)page_tables_l0));
 	__asm__ volatile("msr ttbr1_el1, %0" :: "r"((UW64)page_tables_l0));
 
+	uart_puts("  [7] Synchronization barriers...\n");
 	/* Synchronization barriers before enabling MMU */
 	__asm__ volatile("dsb sy");
 	__asm__ volatile("isb");
 
+	uart_puts("  [8] Enabling MMU...\n");
 	/*
-	 * Enable MMU and I-cache in SCTLR_EL1
-	 * Note: Enabling D-cache separately to isolate issues
+	 * Enable MMU only (no caches for now to isolate the issue)
 	 */
 	__asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
-	sctlr |= SCTLR_M | SCTLR_I | SCTLR_C;  /* Enable MMU, I-cache, and D-cache */
+	sctlr |= SCTLR_M;  /* Enable MMU only, no caches */
 	__asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr));
 
+	uart_puts("  [9] ISB after MMU enable...\n");
 	/* Instruction Synchronization Barrier */
 	__asm__ volatile("isb");
+
+	uart_puts("  [10] MMU enabled successfully!\n");
 }
 
 /*
