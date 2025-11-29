@@ -293,9 +293,6 @@ static void schedule(void)
 	/* Set scheduled task */
 	if (next_task != NULL) {
 		schedtsk = (void*)next_task;
-		uart_puts("[SCHED] Switch to Task");
-		uart_puthex((UW)next_task->tskid);
-		uart_puts("\n");
 	}
 }
 
