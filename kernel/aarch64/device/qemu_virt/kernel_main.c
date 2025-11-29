@@ -430,16 +430,6 @@ static inline ID tk_get_tid(void)
 	return (ID)ret;
 }
 
-/* Task delay (in milliseconds) - implemented in user space */
-static inline void tk_dly_tsk(UW64 dlytim)
-{
-	UW64 start = tk_get_tim();
-	/* Busy wait in user space (interrupts are enabled here) */
-	while ((tk_get_tim() - start) < dlytim) {
-		/* Timer interrupts will update timer_tick_count */
-	}
-}
-
 /* Get system time (timer tick count) */
 static inline UW64 tk_get_tim(void)
 {
@@ -451,6 +441,16 @@ static inline UW64 tk_get_tim(void)
 		: "memory"
 	);
 	return ret;
+}
+
+/* Task delay (in milliseconds) - implemented in user space */
+static inline void tk_dly_tsk(UW64 dlytim)
+{
+	UW64 start = tk_get_tim();
+	/* Busy wait in user space (interrupts are enabled here) */
+	while ((tk_get_tim() - start) < dlytim) {
+		/* Timer interrupts will update timer_tick_count */
+	}
 }
 
 /*
