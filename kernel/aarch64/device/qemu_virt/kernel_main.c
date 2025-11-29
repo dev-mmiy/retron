@@ -430,17 +430,14 @@ static inline ID tk_get_tid(void)
 	return (ID)ret;
 }
 
-/* Task delay (in milliseconds) */
-static inline ER tk_dly_tsk(UW64 dlytim)
+/* Task delay (in milliseconds) - implemented in user space */
+static inline void tk_dly_tsk(UW64 dlytim)
 {
-	register UW64 ret __asm__("x0") = dlytim;
-	__asm__ volatile(
-		"svc %1"
-		: "+r"(ret)
-		: "i"(SVC_DLY_TSK)
-		: "memory"
-	);
-	return (ER)ret;
+	UW64 start = tk_get_tim();
+	/* Busy wait in user space (interrupts are enabled here) */
+	while ((tk_get_tim() - start) < dlytim) {
+		/* Timer interrupts will update timer_tick_count */
+	}
 }
 
 /* Get system time (timer tick count) */
