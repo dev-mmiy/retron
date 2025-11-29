@@ -2803,3 +2803,243 @@ pkill -f qemu-system-aarch64
 
 詳細は `UART_DEBUG_NEXT_STEPS.md`、`UART_FIX_PROPOSAL.md`、`UART_MEMORY_MAPPING_ANALYSIS.md` を参照してください。
 
+
+## 🎉 Phase 2.7: イベントフラグ実装完了 (2025-11-29)
+
+### 実装内容
+
+ビットパターン同期機構を持つイベントフラグを実装しました。AND/OR条件待ちと自動クリア機能により、複雑な同期パターンに対応します。
+
+**主な変更**:
+- `kernel_main.c`: イベントフラグ管理、AND/OR条件判定、複数タスク起床処理
+
+**実装機能**:
+- ✅ **データ構造**:
+  - `FLGCB`: イベントフラグ制御ブロック (ID, ビットパターン, 待ちキュー)
+  - `TCB`拡張: wait_flgptn (待機ビットパターン), wait_mode (待機モード)
+  - 最大4個のイベントフラグをサポート
+
+- ✅ **待機モード定数**:
+  - `TWF_ANDW (0x00)`: AND待ち（指定ビット全てが立つまで待機）
+  - `TWF_ORW (0x01)`: OR待ち（指定ビットのいずれかが立つまで待機）
+  - `TWF_CLR (0x10)`: 自動クリア（起床時に一致ビットをクリア）
+
+- ✅ **システムコール** (4つの新規SVC):
+  - `tk_cre_flg(iflgptn)`: イベントフラグ生成 (SVC #11)
+  - `tk_set_flg(flgid, setptn)`: ビットセット (SVC #12)
+  - `tk_clr_flg(flgid, clrptn)`: ビットクリア (SVC #13)
+  - `tk_wai_flg(flgid, waiptn, wfmode)`: ビット待機 (SVC #14)
+
+- ✅ **複雑な同期機能**:
+  - AND条件: 全ビット一致待ち
+  - OR条件: 部分一致待ち
+  - 自動クリア (TWF_CLR): 起床時に一致ビットを自動削除
+  - 手動クリア: tk_clr_flg で明示的にクリア
+  - 複数タスク起床: set_flg で待ちキュー全体をチェック
+
+- ✅ **デモ実装**:
+  - Task1: ビット0, 1, 2を順番にセット
+  - Task2: OR待ち (ビット0|1, 自動クリア) と AND待ち (ビット2, 手動クリア) を交互実行
+  - 複雑な同期パターンの実証
+
+**期待される出力**:
+```
+Initializing event flags...
+Demo event flag created: ID=0x00000001
+
+[Task1] Started
+[Task1] Setting flag bits 0x00000001
+[Task1] Flag set
+...
+[Task2] Started
+[Task2] Waiting for flag (OR, bits 0x00000003, auto-clear)...
+[Task2] Got flag bits!
+...
+[Task2] Waiting for flag (AND, bit 0x00000004)...
+[Task2] Got flag bits!
+[Task2] Clearing bit 2 manually
+...
+```
+
+**技術的なハイライト**:
+1. **ビットパターン同期**: 32ビットパターンによる柔軟な同期条件
+2. **AND/OR条件**: 全ビット一致 vs 部分一致の選択
+3. **自動クリア機構**: TWF_CLRフラグで起床時に一致ビット削除
+4. **複数タスク起床**: set_flg時に全待ちタスクをチェックし条件満了タスクを起床
+5. **即時満了判定**: wai_flg時に条件が既に満たされている場合は即座にリターン
+
+### アーキテクチャ詳細
+
+**イベントフラグ動作フロー**:
+
+**ケース1: set_flg (ビットセット)**
+```
+1. set_flg システムコール実行
+   ↓
+2. 指定ビットをOR演算でセット
+   flgptn |= setptn
+   ↓
+3. 待ちキュー全体を走査
+   ↓
+4. 各待ちタスクについて条件チェック:
+   
+   4a. OR待ち (TWF_ORW):
+      - 条件: (flgptn & wait_flgptn) != 0
+      - 一致: 少なくとも1ビットが一致
+
+   4b. AND待ち (TWF_ANDW):
+      - 条件: (flgptn & wait_flgptn) == wait_flgptn
+      - 一致: 指定ビット全てが一致
+   ↓
+5. 条件満了タスクを起床:
+   - キューから削除
+   - TS_WAIT → TS_READY に変更
+   
+   5a. TWF_CLR有効:
+      - OR待ち: 一致した部分ビットをクリア
+        flgptn &= ~(flgptn & wait_flgptn)
+      - AND待ち: 待機ビット全てをクリア
+        flgptn &= ~wait_flgptn
+
+   5b. TWF_CLR無効:
+      - ビットパターン保持（手動クリア待ち）
+```
+
+**ケース2: wai_flg (ビット待機)**
+```
+1. wai_flg システムコール実行
+   ↓
+2. 条件チェック:
+   
+   2a. OR待ち (TWF_ORW):
+      - match = (flgptn & waiptn) != 0
+
+   2b. AND待ち (TWF_ANDW):
+      - match = (flgptn & waiptn) == waiptn
+   ↓
+3a. 条件既に満了:
+   - TWF_CLR有効 → ビットクリア
+   - 即座にリターン（成功）
+
+3b. 条件未満了:
+   - タスク状態を TS_READY → TS_WAIT に変更
+   - wait_flgptn = waiptn 設定
+   - wait_mode = wfmode 設定
+   - 待ちキューの末尾に追加
+   - タスクスイッチ → 他のタスク実行
+   - (set_flg で TS_READY に戻るまで待機)
+```
+
+**ケース3: clr_flg (ビットクリア)**
+```
+1. clr_flg システムコール実行
+   ↓
+2. 指定ビットをAND演算でクリア
+   flgptn &= clrptn
+   (clrptn は反転マスク: 0=クリア, 1=保持)
+   ↓
+3. 待ちタスクチェックなし
+   (set_flgのみが起床処理を実行)
+```
+
+**待機モードの組み合わせ**:
+
+| モード | 値 | 意味 |
+|--------|-----|------|
+| TWF_ANDW | 0x00 | 指定ビット全てが立つまで待機 |
+| TWF_ORW | 0x01 | 指定ビットのいずれかが立つまで待機 |
+| TWF_ANDW \| TWF_CLR | 0x10 | AND待ち＋自動クリア |
+| TWF_ORW \| TWF_CLR | 0x11 | OR待ち＋自動クリア |
+
+**データ構造**:
+```c
+typedef struct {
+    ID   flgid;      // イベントフラグID
+    UW   flgptn;     // 現在のビットパターン (32ビット)
+    TCB  *wait_queue; // 待ちタスクのFIFOキュー
+} FLGCB;
+
+// TCB拡張フィールド
+typedef struct tcb {
+    // ... 既存フィールド ...
+    UW   wait_flgptn; // 待機ビットパターン
+    UW   wait_mode;   // 待機モード (TWF_xxx)
+} TCB;
+```
+
+**複数タスク起床のロジック**:
+
+セマフォやミューテックスと異なり、イベントフラグのset_flgは**待ちキュー全体を走査**します:
+```c
+// 疑似コード
+while (waiting_task != NULL) {
+    next_task = waiting_task->wait_next;
+    
+    // 条件判定
+    if (condition_satisfied(waiting_task)) {
+        // キューから削除＆起床
+        remove_from_queue(waiting_task);
+        waiting_task->state = TS_READY;
+        
+        // 自動クリア処理
+        if (waiting_task->wait_mode & TWF_CLR) {
+            clear_matched_bits(waiting_task);
+        }
+    }
+    
+    waiting_task = next_task;
+}
+```
+
+この実装により、1回のset_flgで複数タスクが同時起床可能です（セマフォは1タスクずつ）。
+
+### ビルド・テスト方法
+
+```bash
+cd kernel/aarch64/device/qemu_virt
+make clean && make
+timeout 5 make run
+```
+
+動作確認ポイント:
+1. イベントフラグ生成メッセージ（ID=1）
+2. Task1がビット0, 1, 2を順番にセット
+3. Task2がOR待ち（ビット0|1）で即座に起床
+4. 自動クリア (TWF_CLR) でビットが削除される
+5. Task2がAND待ち（ビット2）で起床
+6. 手動クリア (tk_clr_flg) でビット2が削除される
+7. 複雑な同期パターンが正常動作
+
+### 解決した課題
+
+1. **複数タスク起床の実装**: set_flg で待ちキュー全体を走査し条件満了タスクを全て起床
+2. **AND/OR条件判定**: ビット演算で正確に条件一致を判定
+3. **自動クリア機構**: TWF_CLRフラグに応じて一致ビットを削除
+4. **即時満了処理**: wai_flg で条件が既に満たされている場合の最適化
+5. **複雑な同期実証**: OR待ち＋自動クリアとAND待ち＋手動クリアの組み合わせテスト
+
+### 次のステップ
+
+Phase 2の同期プリミティブ実装が充実してきました。次の候補:
+
+**同期プリミティブの拡張**:
+- メッセージバッファ (tk_cre_mbf, tk_snd_mbf, tk_rcv_mbf)
+- メールボックス (tk_cre_mbx, tk_snd_mbx, tk_rcv_mbx)
+- メモリプール (tk_cre_mpl, tk_get_mpl, tk_rel_mpl)
+
+**タスク制御の拡張**:
+- タスク休止・起床 (tk_slp_tsk, tk_wup_tsk)
+- タスク遅延 (tk_dly_tsk)
+- タスク優先度変更 (tk_chg_pri)
+
+**高度な機能**:
+- 優先度継承機構 (Priority Inheritance Protocol)
+- タイムアウト付き待ち (tk_wai_flg with timeout)
+- 割り込みハンドラ登録 (tk_def_int)
+
+または:
+- **Phase 3: システムサービス開発**へ進む
+- デバイスドライバの拡充（UART, GPIO, SPI等）
+
+---
+
