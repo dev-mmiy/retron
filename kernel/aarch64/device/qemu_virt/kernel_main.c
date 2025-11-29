@@ -84,6 +84,7 @@ typedef struct tcb {
 	void		*wait_obj;	/* Object being waited on (semaphore, etc.) */
 	UW		wait_flgptn;	/* Flag pattern for event flag wait */
 	UW		wait_mode;	/* Wait mode for event flag wait */
+	void		*wait_regs;	/* Saved register context (SVC_REGS*) for blocked tasks */
 } TCB;
 
 /*
@@ -161,6 +162,33 @@ static ID demo_flg = 0;		/* Will be initialized in kernel_main */
 #define TWF_ANDW	0x00	/* AND wait (wait for all bits) */
 #define TWF_ORW		0x01	/* OR wait (wait for any bit) */
 #define TWF_CLR		0x10	/* Clear matched bits after wakeup */
+
+/*
+ * Message Buffer Control Block
+ */
+typedef struct {
+	ID	mbfid;		/* Message buffer ID */
+	UW	bufsz;		/* Buffer size in bytes */
+	UW	maxmsz;		/* Maximum message size */
+	UW	*buffer;	/* Ring buffer for messages */
+	UW	head;		/* Head index (read position) */
+	UW	tail;		/* Tail index (write position) */
+	UW	freesz;		/* Free space in buffer */
+	TCB	*send_queue;	/* Queue of sending tasks (buffer full) */
+	TCB	*recv_queue;	/* Queue of receiving tasks (buffer empty) */
+} MBFCB;
+
+/*
+ * Message buffer management
+ */
+#define MAX_MSGBUFFERS	4
+#define MSGBUF_SIZE	256	/* 256 bytes per message buffer */
+static MBFCB msgbuffer_table[MAX_MSGBUFFERS];
+static UW msgbuffer_storage[MAX_MSGBUFFERS][MSGBUF_SIZE / sizeof(UW)] __attribute__((aligned(4)));
+static INT next_mbfid = 1;	/* Next message buffer ID to allocate */
+
+/* Shared message buffer for demo */
+static ID demo_mbf = 0;		/* Will be initialized in kernel_main */
 
 /* Task stacks (1KB each) */
 #define TASK_STACK_SIZE	1024
@@ -392,6 +420,9 @@ static void schedule(void)
 #define SVC_SET_FLG		12	/* Set event flag */
 #define SVC_CLR_FLG		13	/* Clear event flag */
 #define SVC_WAI_FLG		14	/* Wait event flag */
+#define SVC_CRE_MBF		15	/* Create message buffer */
+#define SVC_SND_MBF		16	/* Send message to buffer */
+#define SVC_RCV_MBF		17	/* Receive message from buffer */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -996,6 +1027,290 @@ static ER svc_wai_flg(SVC_REGS *regs)
 }
 
 /*
+ * System call: Create message buffer
+ * Arguments: x0 = bufsz (buffer size), x1 = maxmsz (max message size)
+ * Returns: message buffer ID in x0 (or error)
+ */
+static ER svc_cre_mbf(SVC_REGS *regs)
+{
+	UW bufsz = (UW)regs->x0;
+	UW maxmsz = (UW)regs->x1;
+	MBFCB *mbf = NULL;
+	INT i;
+
+	/* Validate parameters */
+	if (bufsz == 0 || bufsz > MSGBUF_SIZE || maxmsz == 0 || maxmsz > (bufsz - 2)) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Find free message buffer */
+	for (i = 0; i < MAX_MSGBUFFERS; i++) {
+		if (msgbuffer_table[i].mbfid == 0) {
+			mbf = &msgbuffer_table[i];
+			break;
+		}
+	}
+
+	if (mbf == NULL) {
+		regs->x0 = -1;  /* No free message buffer */
+		return -1;
+	}
+
+	/* Initialize message buffer */
+	mbf->mbfid = next_mbfid++;
+	mbf->bufsz = bufsz;
+	mbf->maxmsz = maxmsz;
+	mbf->buffer = msgbuffer_storage[i];
+	mbf->head = 0;
+	mbf->tail = 0;
+	mbf->freesz = bufsz;
+	mbf->send_queue = NULL;
+	mbf->recv_queue = NULL;
+
+	regs->x0 = mbf->mbfid;
+	return E_OK;
+}
+
+/*
+ * System call: Send message to buffer
+ * Arguments: x0 = mbfid, x1 = msg pointer, x2 = msgsz
+ * Returns: E_OK or error in x0
+ */
+static ER svc_snd_mbf(SVC_REGS *regs)
+{
+	ID mbfid = (ID)regs->x0;
+	UW *msg = (UW *)regs->x1;
+	UW msgsz = (UW)regs->x2;
+	MBFCB *mbf = NULL;
+	TCB *current;
+	TCB *recv_task;
+	TCB **queue_ptr;
+	INT i;
+	UW msg_total_sz;
+	UW byte_idx;
+	unsigned char *src_bytes;
+	unsigned char *dst_bytes;
+
+	/* Find message buffer */
+	for (i = 0; i < MAX_MSGBUFFERS; i++) {
+		if (msgbuffer_table[i].mbfid == mbfid) {
+			mbf = &msgbuffer_table[i];
+			break;
+		}
+	}
+
+	if (mbf == NULL || msgsz == 0 || msgsz > mbf->maxmsz) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Message format: [2-byte size][data] */
+	msg_total_sz = 2 + msgsz;
+
+	/* Check if there's a task waiting to receive */
+	if (mbf->recv_queue != NULL) {
+		/* Direct transfer to waiting task */
+		recv_task = mbf->recv_queue;
+		mbf->recv_queue = recv_task->wait_next;
+
+		/* Copy message to receiver's buffer (stored in wait_obj as UW*) */
+		UW *recv_buf = (UW *)recv_task->wait_obj;
+		src_bytes = (unsigned char *)msg;
+		dst_bytes = (unsigned char *)recv_buf;
+		for (byte_idx = 0; byte_idx < msgsz; byte_idx++) {
+			dst_bytes[byte_idx] = src_bytes[byte_idx];
+		}
+
+		/* Set message size in receiver's return value (x0) via saved register context */
+		if (recv_task->wait_regs != NULL) {
+			SVC_REGS *recv_regs = (SVC_REGS *)recv_task->wait_regs;
+			recv_regs->x0 = msgsz;
+		}
+
+		/* Wake up receiver */
+		recv_task->state = TS_READY;
+		recv_task->wait_next = NULL;
+		recv_task->wait_obj = NULL;
+		recv_task->wait_regs = NULL;
+
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* Check if there's enough space in buffer */
+	if (mbf->freesz < msg_total_sz) {
+		/* Buffer full, add sender to wait queue */
+		current = (TCB *)ctxtsk;
+		if (current == NULL) {
+			regs->x0 = -1;
+			return -1;
+		}
+
+		/* Store message info in TCB for later */
+		current->state = TS_WAIT;
+		current->wait_next = NULL;
+		current->wait_obj = (void *)msg;  /* Store message pointer */
+		current->wait_flgptn = msgsz;     /* Store message size */
+
+		/* Add to end of send queue */
+		if (mbf->send_queue == NULL) {
+			mbf->send_queue = current;
+		} else {
+			queue_ptr = &mbf->send_queue;
+			while (*queue_ptr != NULL && (*queue_ptr)->wait_next != NULL) {
+				queue_ptr = &((*queue_ptr)->wait_next);
+			}
+			(*queue_ptr)->wait_next = current;
+		}
+
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* Write message to buffer */
+	dst_bytes = (unsigned char *)mbf->buffer;
+	src_bytes = (unsigned char *)msg;
+
+	/* Write size (2 bytes) */
+	dst_bytes[(mbf->tail) % mbf->bufsz] = (unsigned char)(msgsz & 0xFF);
+	dst_bytes[(mbf->tail + 1) % mbf->bufsz] = (unsigned char)((msgsz >> 8) & 0xFF);
+
+	/* Write data */
+	for (byte_idx = 0; byte_idx < msgsz; byte_idx++) {
+		dst_bytes[(mbf->tail + 2 + byte_idx) % mbf->bufsz] = src_bytes[byte_idx];
+	}
+
+	mbf->tail = (mbf->tail + msg_total_sz) % mbf->bufsz;
+	mbf->freesz -= msg_total_sz;
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Receive message from buffer
+ * Arguments: x0 = mbfid, x1 = msg buffer pointer
+ * Returns: message size in x0 (or error)
+ */
+static ER svc_rcv_mbf(SVC_REGS *regs)
+{
+	ID mbfid = (ID)regs->x0;
+	UW *msg = (UW *)regs->x1;
+	MBFCB *mbf = NULL;
+	TCB *current;
+	TCB *send_task;
+	TCB **queue_ptr;
+	INT i;
+	UW msgsz;
+	UW msg_total_sz;
+	UW byte_idx;
+	unsigned char *src_bytes;
+	unsigned char *dst_bytes;
+
+	/* Find message buffer */
+	for (i = 0; i < MAX_MSGBUFFERS; i++) {
+		if (msgbuffer_table[i].mbfid == mbfid) {
+			mbf = &msgbuffer_table[i];
+			break;
+		}
+	}
+
+	if (mbf == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Check if buffer has messages */
+	if (mbf->freesz == mbf->bufsz) {
+		/* Buffer empty, add to receive queue */
+		current = (TCB *)ctxtsk;
+		if (current == NULL) {
+			regs->x0 = -1;
+			return -1;
+		}
+
+		current->state = TS_WAIT;
+		current->wait_next = NULL;
+		current->wait_obj = (void *)msg;  /* Store receive buffer pointer */
+		current->wait_regs = (void *)regs; /* Store register context for return value */
+
+		/* Add to end of recv queue */
+		if (mbf->recv_queue == NULL) {
+			mbf->recv_queue = current;
+		} else {
+			queue_ptr = &mbf->recv_queue;
+			while (*queue_ptr != NULL && (*queue_ptr)->wait_next != NULL) {
+				queue_ptr = &((*queue_ptr)->wait_next);
+			}
+			(*queue_ptr)->wait_next = current;
+		}
+
+		/* Don't set x0 here - it will be set when task is woken up */
+		return E_OK;
+	}
+
+	/* Read message from buffer */
+	src_bytes = (unsigned char *)mbf->buffer;
+	dst_bytes = (unsigned char *)msg;
+
+	/* Read size (2 bytes) */
+	msgsz = src_bytes[mbf->head % mbf->bufsz];
+	msgsz |= ((UW)src_bytes[(mbf->head + 1) % mbf->bufsz]) << 8;
+
+	/* Read data */
+	for (byte_idx = 0; byte_idx < msgsz; byte_idx++) {
+		dst_bytes[byte_idx] = src_bytes[(mbf->head + 2 + byte_idx) % mbf->bufsz];
+	}
+
+	msg_total_sz = 2 + msgsz;
+	mbf->head = (mbf->head + msg_total_sz) % mbf->bufsz;
+	mbf->freesz += msg_total_sz;
+
+	/* Check if any sender is waiting */
+	if (mbf->send_queue != NULL) {
+		send_task = mbf->send_queue;
+		mbf->send_queue = send_task->wait_next;
+
+		/* Get sender's message info */
+		UW *send_msg = (UW *)send_task->wait_obj;
+		UW send_msgsz = send_task->wait_flgptn;
+		UW send_total_sz = 2 + send_msgsz;
+
+		/* Check if there's now enough space */
+		if (mbf->freesz >= send_total_sz) {
+			/* Write sender's message to buffer */
+			unsigned char *send_src = (unsigned char *)send_msg;
+
+			/* Write size */
+			src_bytes[(mbf->tail) % mbf->bufsz] = (unsigned char)(send_msgsz & 0xFF);
+			src_bytes[(mbf->tail + 1) % mbf->bufsz] = (unsigned char)((send_msgsz >> 8) & 0xFF);
+
+			/* Write data */
+			for (byte_idx = 0; byte_idx < send_msgsz; byte_idx++) {
+				src_bytes[(mbf->tail + 2 + byte_idx) % mbf->bufsz] = send_src[byte_idx];
+			}
+
+			mbf->tail = (mbf->tail + send_total_sz) % mbf->bufsz;
+			mbf->freesz -= send_total_sz;
+
+			/* Wake up sender */
+			send_task->state = TS_READY;
+			send_task->wait_next = NULL;
+			send_task->wait_obj = NULL;
+			send_task->wait_flgptn = 0;
+		} else {
+			/* Still not enough space, put back in queue */
+			send_task->wait_next = mbf->send_queue;
+			mbf->send_queue = send_task;
+		}
+	}
+
+	regs->x0 = msgsz;
+	return E_OK;
+}
+
+/*
  * System call handler (called from assembly)
  * x0 = SVC number
  * x1 = pointer to saved register context
@@ -1044,6 +1359,15 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 		break;
 	case SVC_WAI_FLG:
 		svc_wai_flg(regs);
+		break;
+	case SVC_CRE_MBF:
+		svc_cre_mbf(regs);
+		break;
+	case SVC_SND_MBF:
+		svc_snd_mbf(regs);
+		break;
+	case SVC_RCV_MBF:
+		svc_rcv_mbf(regs);
 		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
@@ -1230,6 +1554,49 @@ static inline ER tk_wai_flg(ID flgid, UW waiptn, UW wfmode)
 	return (ER)ret;
 }
 
+/* Create message buffer */
+static inline ID tk_cre_mbf(UW bufsz, UW maxmsz)
+{
+	register UW64 ret __asm__("x0") = bufsz;
+	register UW64 max __asm__("x1") = maxmsz;
+	__asm__ volatile(
+		"svc %2"
+		: "+r"(ret)
+		: "r"(max), "i"(SVC_CRE_MBF)
+		: "memory"
+	);
+	return (ID)ret;
+}
+
+/* Send message to buffer */
+static inline ER tk_snd_mbf(ID mbfid, void *msg, UW msgsz)
+{
+	register UW64 ret __asm__("x0") = mbfid;
+	register UW64 msgptr __asm__("x1") = (UW64)msg;
+	register UW64 size __asm__("x2") = msgsz;
+	__asm__ volatile(
+		"svc %3"
+		: "+r"(ret)
+		: "r"(msgptr), "r"(size), "i"(SVC_SND_MBF)
+		: "memory"
+	);
+	return (ER)ret;
+}
+
+/* Receive message from buffer */
+static inline INT tk_rcv_mbf(ID mbfid, void *msg)
+{
+	register UW64 ret __asm__("x0") = mbfid;
+	register UW64 msgptr __asm__("x1") = (UW64)msg;
+	__asm__ volatile(
+		"svc %2"
+		: "+r"(ret)
+		: "r"(msgptr), "i"(SVC_RCV_MBF)
+		: "memory"
+	);
+	return (INT)ret;
+}
+
 /*
  * MMU Setup Functions
  */
@@ -1359,6 +1726,8 @@ static void task1_main(INT stacd, void *exinf)
 	ID tid;
 	UW64 time;
 	INT count = 0;
+	UW msg_data[16];  /* Message buffer (up to 64 bytes) */
+	ER err;
 
 	(void)stacd;
 	(void)exinf;
@@ -1366,37 +1735,37 @@ static void task1_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	uart_puts("[Task1] Event flag setter started\n");
+	uart_puts("[Task1] Message producer started\n");
 
 	while (1) {
-		/* Simulate work */
+		/* Simulate work - generate data */
 		for (volatile int i = 0; i < 300000; i++);
 
 		time = tk_get_tim();
 		count++;
 
-		/* Set different event flags */
-		if (count % 3 == 1) {
-			/* Set bit 0 (0x01) */
-			uart_puts("[Task1] Setting flag bit 0 at ");
-			uart_puthex((UW)time);
-			uart_puts("ms\n");
-			tk_set_flg(demo_flg, 0x01);
-		} else if (count % 3 == 2) {
-			/* Set bit 1 (0x02) */
-			uart_puts("[Task1] Setting flag bit 1 at ");
-			uart_puthex((UW)time);
-			uart_puts("ms\n");
-			tk_set_flg(demo_flg, 0x02);
+		/* Prepare message with different content */
+		msg_data[0] = count;         /* Message sequence number */
+		msg_data[1] = (UW)time;      /* Timestamp */
+		msg_data[2] = count * 10;    /* Data value */
+
+		/* Send message */
+		uart_puts("[Task1] Sending message #");
+		uart_puthex(count);
+		uart_puts(" (value=");
+		uart_puthex(count * 10);
+		uart_puts(") at ");
+		uart_puthex((UW)time);
+		uart_puts("ms\n");
+
+		err = tk_snd_mbf(demo_mbf, msg_data, 12);  /* Send 12 bytes (3 words) */
+		if (err == E_OK) {
+			uart_puts("[Task1] Message sent successfully\n");
 		} else {
-			/* Set bit 2 (0x04) */
-			uart_puts("[Task1] Setting flag bit 2 at ");
-			uart_puthex((UW)time);
-			uart_puts("ms\n");
-			tk_set_flg(demo_flg, 0x04);
+			uart_puts("[Task1] Send failed\n");
 		}
 
-		/* Wait before next set */
+		/* Wait before next send */
 		for (volatile int i = 0; i < 500000; i++);
 	}
 }
@@ -1405,7 +1774,8 @@ static void task2_main(INT stacd, void *exinf)
 {
 	ID tid;
 	UW64 time;
-	INT count = 0;
+	UW msg_data[16];  /* Message buffer (up to 64 bytes) */
+	INT rcv_size;
 
 	(void)stacd;
 	(void)exinf;
@@ -1413,37 +1783,38 @@ static void task2_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	uart_puts("[Task2] Event flag waiter started\n");
+	uart_puts("[Task2] Message consumer started\n");
 
 	while (1) {
-		count++;
 		time = tk_get_tim();
 
-		if (count % 2 == 1) {
-			/* Wait for bit 0 OR bit 1 (with auto-clear) */
-			uart_puts("[Task2] Waiting for bit 0 OR bit 1 (TWF_ORW|TWF_CLR) at ");
-			uart_puthex((UW)time);
-			uart_puts("ms\n");
-			tk_wai_flg(demo_flg, 0x03, TWF_ORW | TWF_CLR);
+		/* Receive message */
+		uart_puts("[Task2] Waiting for message at ");
+		uart_puthex((UW)time);
+		uart_puts("ms...\n");
 
-			time = tk_get_tim();
-			uart_puts("[Task2] Woken up! (OR condition satisfied) at ");
+		rcv_size = tk_rcv_mbf(demo_mbf, msg_data);
+
+		time = tk_get_tim();
+
+		if (rcv_size > 0) {
+			uart_puts("[Task2] Received message at ");
 			uart_puthex((UW)time);
+			uart_puts("ms:\n");
+			uart_puts("  Sequence: ");
+			uart_puthex(msg_data[0]);
+			uart_puts("\n");
+			uart_puts("  Timestamp: ");
+			uart_puthex(msg_data[1]);
 			uart_puts("ms\n");
+			uart_puts("  Value: ");
+			uart_puthex(msg_data[2]);
+			uart_puts("\n");
+			uart_puts("  Size: ");
+			uart_puthex(rcv_size);
+			uart_puts(" bytes\n");
 		} else {
-			/* Wait for bit 2 (without auto-clear) */
-			uart_puts("[Task2] Waiting for bit 2 (TWF_ANDW) at ");
-			uart_puthex((UW)time);
-			uart_puts("ms\n");
-			tk_wai_flg(demo_flg, 0x04, TWF_ANDW);
-
-			time = tk_get_tim();
-			uart_puts("[Task2] Woken up! (AND condition satisfied) at ");
-			uart_puthex((UW)time);
-			uart_puts("ms\n");
-
-			/* Manually clear bit 2 */
-			tk_clr_flg(demo_flg, ~0x04);
+			uart_puts("[Task2] Receive failed\n");
 		}
 
 		/* Simulate processing */
@@ -1620,6 +1991,18 @@ void kernel_main(void)
 	demo_flg = tk_cre_flg(0);
 	uart_puts("Demo event flag created: ID=");
 	uart_puthex((UW)demo_flg);
+	uart_puts("\n");
+
+	/* Initialize message buffers */
+	uart_puts("Initializing message buffers...\n");
+	for (INT i = 0; i < MAX_MSGBUFFERS; i++) {
+		msgbuffer_table[i].mbfid = 0;
+	}
+
+	/* Create demo message buffer (128 bytes, max message 64 bytes) */
+	demo_mbf = tk_cre_mbf(128, 64);
+	uart_puts("Demo message buffer created: ID=");
+	uart_puthex((UW)demo_mbf);
 	uart_puts("\n\n");
 
 	/* Initialize tasks */
