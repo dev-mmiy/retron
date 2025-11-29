@@ -11,6 +11,7 @@ build/
 *.elf
 *.bin
 *.img
+*.lst
 
 # QEMU
 *.img
