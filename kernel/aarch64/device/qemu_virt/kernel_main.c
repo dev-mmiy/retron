@@ -297,6 +297,166 @@ static void schedule(void)
 }
 
 /*
+ * System Call Implementation
+ */
+
+/* System call numbers */
+#define SVC_GET_TID		1	/* Get current task ID */
+#define SVC_DLY_TSK		2	/* Task delay */
+#define SVC_GET_TIM		3	/* Get system time */
+#define SVC_EXT_TSK		4	/* Exit task */
+
+/* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
+typedef struct {
+	UW64	spsr;		/* Offset 0 */
+	UW64	padding;	/* Offset 8 */
+	UW64	x30;		/* Offset 16 */
+	UW64	elr;		/* Offset 24 */
+	UW64	x28, x29;	/* Offset 32 */
+	UW64	x26, x27;
+	UW64	x24, x25;
+	UW64	x22, x23;
+	UW64	x20, x21;
+	UW64	x18, x19;
+	UW64	x16, x17;
+	UW64	x14, x15;
+	UW64	x12, x13;
+	UW64	x10, x11;
+	UW64	x8, x9;
+	UW64	x6, x7;
+	UW64	x4, x5;
+	UW64	x2, x3;
+	UW64	x0, x1;		/* Offset 272 */
+} SVC_REGS;
+
+/*
+ * System call: Get current task ID
+ * Returns: task ID in x0
+ */
+static ER svc_get_tid(SVC_REGS *regs)
+{
+	TCB *tcb = (TCB *)ctxtsk;
+	if (tcb == NULL) {
+		regs->x0 = 0;  /* No current task */
+		return E_OK;
+	}
+	regs->x0 = (UW64)tcb->tskid;
+	return E_OK;
+}
+
+/*
+ * System call: Task delay
+ * Input: x0 = delay time in milliseconds
+ */
+static ER svc_dly_tsk(SVC_REGS *regs)
+{
+	UW64 dlytim = regs->x0;
+	UW64 start_tick = timer_tick_count;
+
+	/* Busy wait for now (simple implementation) */
+	while ((timer_tick_count - start_tick) < dlytim) {
+		__asm__ volatile("wfi");  /* Wait for interrupt */
+	}
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Get system time
+ * Returns: current timer tick count in x0
+ */
+static ER svc_get_tim(SVC_REGS *regs)
+{
+	regs->x0 = timer_tick_count;
+	return E_OK;
+}
+
+/*
+ * System call: Exit task (placeholder)
+ */
+static ER svc_ext_tsk(SVC_REGS *regs)
+{
+	uart_puts("[SVC] Task exit requested\n");
+	/* For now, just put task in infinite loop */
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call handler (called from assembly)
+ * x0 = SVC number
+ * x1 = pointer to saved register context
+ */
+void svc_handler_c(UW svc_num, SVC_REGS *regs)
+{
+	switch (svc_num) {
+	case SVC_GET_TID:
+		svc_get_tid(regs);
+		break;
+	case SVC_DLY_TSK:
+		svc_dly_tsk(regs);
+		break;
+	case SVC_GET_TIM:
+		svc_get_tim(regs);
+		break;
+	case SVC_EXT_TSK:
+		svc_ext_tsk(regs);
+		break;
+	default:
+		uart_puts("[SVC] Unknown system call: ");
+		uart_puthex((UW)svc_num);
+		uart_puts("\n");
+		regs->x0 = -1;  /* Error */
+		break;
+	}
+}
+
+/*
+ * User-space system call wrappers
+ * These functions invoke system calls using the SVC instruction
+ */
+
+/* Get current task ID */
+static inline ID tk_get_tid(void)
+{
+	register UW64 ret __asm__("x0");
+	__asm__ volatile(
+		"svc %1"
+		: "=r"(ret)
+		: "i"(SVC_GET_TID)
+		: "memory"
+	);
+	return (ID)ret;
+}
+
+/* Task delay (in milliseconds) */
+static inline ER tk_dly_tsk(UW64 dlytim)
+{
+	register UW64 ret __asm__("x0") = dlytim;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(ret)
+		: "i"(SVC_DLY_TSK)
+		: "memory"
+	);
+	return (ER)ret;
+}
+
+/* Get system time (timer tick count) */
+static inline UW64 tk_get_tim(void)
+{
+	register UW64 ret __asm__("x0");
+	__asm__ volatile(
+		"svc %1"
+		: "=r"(ret)
+		: "i"(SVC_GET_TIM)
+		: "memory"
+	);
+	return ret;
+}
+
+/*
  * MMU Setup Functions
  */
 
@@ -422,27 +582,53 @@ static void init_mmu(void)
  */
 static void task1_main(INT stacd, void *exinf)
 {
+	ID tid;
+	UW64 time;
+
 	(void)stacd;
 	(void)exinf;
 
-	while (1) {
-		uart_puts("[Task1] Running...\n");
+	/* Get task ID using system call */
+	tid = tk_get_tid();
 
-		/* Busy wait */
-		for (volatile int i = 0; i < 1000000; i++);
+	while (1) {
+		/* Get current time using system call */
+		time = tk_get_tim();
+
+		uart_puts("[Task1] TID=");
+		uart_puthex((UW)tid);
+		uart_puts(" Time=");
+		uart_puthex((UW)time);
+		uart_puts("ms\n");
+
+		/* Delay using system call instead of busy-wait */
+		tk_dly_tsk(500);  /* 500ms delay */
 	}
 }
 
 static void task2_main(INT stacd, void *exinf)
 {
+	ID tid;
+	UW64 time;
+
 	(void)stacd;
 	(void)exinf;
 
-	while (1) {
-		uart_puts("[Task2] Running...\n");
+	/* Get task ID using system call */
+	tid = tk_get_tid();
 
-		/* Busy wait */
-		for (volatile int i = 0; i < 1000000; i++);
+	while (1) {
+		/* Get current time using system call */
+		time = tk_get_tim();
+
+		uart_puts("[Task2] TID=");
+		uart_puthex((UW)tid);
+		uart_puts(" Time=");
+		uart_puthex((UW)time);
+		uart_puts("ms\n");
+
+		/* Delay using system call instead of busy-wait */
+		tk_dly_tsk(700);  /* 700ms delay */
 	}
 }
 

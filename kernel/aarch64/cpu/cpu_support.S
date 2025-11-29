@@ -160,8 +160,27 @@ lower_el_aarch32_serror:
 
 sync_handler:
 	SAVE_CONTEXT
+
+	/* Read ESR_EL1 to determine exception type */
+	mrs	x0, esr_el1
+	lsr	x1, x0, #26		/* Extract EC (Exception Class) bits[31:26] */
+
+	/* Check if it's an SVC exception (EC = 0x15 for SVC from AArch64) */
+	cmp	x1, #0x15
+	b.eq	svc_handler_entry
+
+	/* Not SVC - call generic sync exception handler */
 	mov	x0, sp
 	bl	sync_exception_handler
+	RESTORE_CONTEXT
+	eret
+
+svc_handler_entry:
+	/* Extract SVC number from ESR_EL1 bits[15:0] */
+	and	x0, x0, #0xFFFF		/* x0 = SVC number */
+	mov	x1, sp			/* x1 = pointer to saved context */
+	bl	svc_handler_c		/* Call C handler */
+
 	RESTORE_CONTEXT
 	eret
 
