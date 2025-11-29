@@ -392,34 +392,38 @@ static void init_mmu(void)
 
 	uart_puts("  [5] Configuring TCR_EL1...\n");
 	/*
-	 * Configure TCR_EL1 (Translation Control Register)
-	 * - T0SZ=25: 39-bit VA for TTBR0_EL1 (512GB)
-	 * - T1SZ=25: 39-bit VA for TTBR1_EL1 (512GB)
-	 * - TG0=4KB, TG1=4KB: 4KB granule
-	 * - IPS=40 bits (1TB physical address space)
-	 * - Shareable, cacheable attributes
+	 * Read CPU capabilities
 	 */
-	tcr = TCR_T0SZ(25)
-	    | TCR_IRGN0_WBWA
-	    | TCR_ORGN0_WBWA
-	    | TCR_SH0_INNER
-	    | TCR_TG0_4KB
-	    | TCR_T1SZ(25)
-	    | TCR_IRGN1_WBWA
-	    | TCR_ORGN1_WBWA
-	    | TCR_SH1_INNER
-	    | TCR_TG1_4KB
-	    | TCR_IPS_1TB;
+	UW64 mmfr0;
+	UW parange;
+	__asm__ volatile("mrs %0, id_aa64mmfr0_el1" : "=r"(mmfr0));
+	parange = mmfr0 & 0xF;  /* Bits[3:0] = PARange */
+
+	uart_puts("    CPU PARange: ");
+	uart_puthex(parange);
+	uart_puts("\n");
+
+	/*
+	 * Configure TCR_EL1 (Translation Control Register)
+	 * Using conservative settings:
+	 * - T0SZ=16: 48-bit VA for TTBR0_EL1 (256TB) - maximum for 4-level
+	 * - No TTBR1 (only use TTBR0)
+	 * - TG0=4KB: 4KB granule
+	 * - IPS from CPU capabilities
+	 * - Non-shareable, non-cacheable for simplicity
+	 */
+	tcr = TCR_T0SZ(16)           /* 48-bit VA */
+	    | TCR_TG0_4KB            /* 4KB granule */
+	    | (parange << 32);       /* IPS from CPU */
 
 	__asm__ volatile("msr tcr_el1, %0" :: "r"(tcr));
 
-	uart_puts("  [6] Setting TTBR0/TTBR1...\n");
+	uart_puts("  [6] Setting TTBR0...\n");
 	/*
-	 * Set TTBR0_EL1 and TTBR1_EL1 to point to L0 page table
-	 * For simplicity, use same page table for both
+	 * Set TTBR0_EL1 to point to L0 page table
+	 * (Not using TTBR1 for simplicity)
 	 */
 	__asm__ volatile("msr ttbr0_el1, %0" :: "r"((UW64)page_tables_l0));
-	__asm__ volatile("msr ttbr1_el1, %0" :: "r"((UW64)page_tables_l0));
 
 	uart_puts("  [7] Synchronization barriers...\n");
 	/* Synchronization barriers before enabling MMU */
@@ -581,12 +585,24 @@ void kernel_main(void)
 	uart_puts("CPU ID (MIDR_EL1): ");
 	uart_puthex(cnt);
 	uart_puts("\n");
+
+	/* Read ID_AA64MMFR0_EL1 for MMU features */
+	__asm__ volatile("mrs %0, id_aa64mmfr0_el1" : "=r"(cnt));
+	uart_puts("MMU Features (ID_AA64MMFR0_EL1): ");
+	uart_puthex(cnt);
+	uart_puts("\n");
+	uart_puts("  PARange: ");
+	uart_puthex(cnt & 0xF);
+	uart_puts(" (bits[3:0])\n");
+	uart_puts("  TGran4: ");
+	uart_puthex((cnt >> 28) & 0xF);
+	uart_puts(" (bits[31:28])\n");
 	uart_puts("\n");
 
-	/* Initialize MMU - TEMPORARILY DISABLED for debugging */
-	uart_puts("MMU initialization: SKIPPED (under development)\n");
-	// init_mmu();
-	// uart_puts("MMU enabled (identity mapping with caches).\n");
+	/* Initialize MMU - Re-enabled with CPU feature detection */
+	uart_puts("Initializing MMU...\n");
+	init_mmu();
+	uart_puts("MMU enabled (identity mapping).\n");
 	uart_puts("\n");
 
 	uart_puts("T-Kernel initialization complete.\n");
