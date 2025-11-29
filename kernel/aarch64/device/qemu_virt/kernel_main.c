@@ -82,6 +82,8 @@ typedef struct tcb {
 	/* Waiting information */
 	struct tcb	*wait_next;	/* Next task in wait queue */
 	void		*wait_obj;	/* Object being waited on (semaphore, etc.) */
+	UW		wait_flgptn;	/* Flag pattern for event flag wait */
+	UW		wait_mode;	/* Wait mode for event flag wait */
 } TCB;
 
 /*
@@ -133,6 +135,32 @@ static INT next_mtxid = 1;	/* Next mutex ID to allocate */
 
 /* Shared mutex for demo */
 static ID demo_mtx = 0;		/* Will be initialized in kernel_main */
+
+/*
+ * Event Flag Control Block
+ */
+typedef struct {
+	ID	flgid;		/* Event flag ID */
+	UW	flgptn;		/* Current flag pattern (bit pattern) */
+	TCB	*wait_queue;	/* Queue of waiting tasks */
+} FLGCB;
+
+/*
+ * Event flag management
+ */
+#define MAX_EVENTFLAGS	4
+static FLGCB eventflag_table[MAX_EVENTFLAGS];
+static INT next_flgid = 1;	/* Next event flag ID to allocate */
+
+/* Shared event flag for demo */
+static ID demo_flg = 0;		/* Will be initialized in kernel_main */
+
+/*
+ * Event flag wait modes
+ */
+#define TWF_ANDW	0x00	/* AND wait (wait for all bits) */
+#define TWF_ORW		0x01	/* OR wait (wait for any bit) */
+#define TWF_CLR		0x10	/* Clear matched bits after wakeup */
 
 /* Task stacks (1KB each) */
 #define TASK_STACK_SIZE	1024
@@ -286,6 +314,8 @@ static ER create_task(INT idx, ID tskid, TASK_FP task, void *stack, INT stksz)
 	tcb->stksz = stksz;
 	tcb->wait_next = NULL;
 	tcb->wait_obj = NULL;
+	tcb->wait_flgptn = 0;
+	tcb->wait_mode = 0;
 
 	setup_task_context(tcb, task, stack, stksz);
 
@@ -358,6 +388,10 @@ static void schedule(void)
 #define SVC_CRE_MTX		8	/* Create mutex */
 #define SVC_LOC_MTX		9	/* Lock mutex */
 #define SVC_UNL_MTX		10	/* Unlock mutex */
+#define SVC_CRE_FLG		11	/* Create event flag */
+#define SVC_SET_FLG		12	/* Set event flag */
+#define SVC_CLR_FLG		13	/* Clear event flag */
+#define SVC_WAI_FLG		14	/* Wait event flag */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -738,6 +772,230 @@ static ER svc_unl_mtx(SVC_REGS *regs)
 }
 
 /*
+ * System call: Create event flag
+ * Input: x0 = initial flag pattern
+ * Output: x0 = event flag ID or error (-1)
+ */
+static ER svc_cre_flg(SVC_REGS *regs)
+{
+	UW iflgptn = (UW)regs->x0;
+	INT i;
+
+	/* Find free event flag slot */
+	for (i = 0; i < MAX_EVENTFLAGS; i++) {
+		if (eventflag_table[i].flgid == 0) {
+			/* Initialize event flag */
+			eventflag_table[i].flgid = next_flgid++;
+			eventflag_table[i].flgptn = iflgptn;
+			eventflag_table[i].wait_queue = NULL;
+
+			regs->x0 = eventflag_table[i].flgid;
+			return E_OK;
+		}
+	}
+
+	/* No free slots */
+	regs->x0 = -1;
+	return -1;
+}
+
+/*
+ * System call: Set event flag bits
+ * Input: x0 = event flag ID, x1 = set pattern
+ * Output: x0 = E_OK or error
+ */
+static ER svc_set_flg(SVC_REGS *regs)
+{
+	ID flgid = (ID)regs->x0;
+	UW setptn = (UW)regs->x1;
+	FLGCB *flg = NULL;
+	TCB *waiting_task;
+	TCB *next_task;
+	TCB **prev_ptr;
+	INT i;
+	UW match;
+
+	/* Find event flag */
+	for (i = 0; i < MAX_EVENTFLAGS; i++) {
+		if (eventflag_table[i].flgid == flgid) {
+			flg = &eventflag_table[i];
+			break;
+		}
+	}
+
+	if (flg == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Set the bits */
+	flg->flgptn |= setptn;
+
+	/* Check all waiting tasks */
+	prev_ptr = &flg->wait_queue;
+	waiting_task = flg->wait_queue;
+
+	while (waiting_task != NULL) {
+		next_task = waiting_task->wait_next;
+
+		/* Check if condition is satisfied */
+		if (waiting_task->wait_mode & TWF_ORW) {
+			/* OR wait: at least one bit must match */
+			match = flg->flgptn & waiting_task->wait_flgptn;
+		} else {
+			/* AND wait: all bits must match */
+			match = (flg->flgptn & waiting_task->wait_flgptn) == waiting_task->wait_flgptn;
+		}
+
+		if (match) {
+			/* Condition satisfied, wake up task */
+			*prev_ptr = waiting_task->wait_next;
+
+			/* Clear matched bits if TWF_CLR is set */
+			if (waiting_task->wait_mode & TWF_CLR) {
+				if (waiting_task->wait_mode & TWF_ORW) {
+					/* OR wait: clear only the matched bits */
+					flg->flgptn &= ~(flg->flgptn & waiting_task->wait_flgptn);
+				} else {
+					/* AND wait: clear all waited bits */
+					flg->flgptn &= ~waiting_task->wait_flgptn;
+				}
+			}
+
+			/* Change task state to READY */
+			waiting_task->state = TS_READY;
+			waiting_task->wait_next = NULL;
+			waiting_task->wait_obj = NULL;
+			waiting_task->wait_flgptn = 0;
+			waiting_task->wait_mode = 0;
+		} else {
+			/* Condition not satisfied, move to next */
+			prev_ptr = &waiting_task->wait_next;
+		}
+
+		waiting_task = next_task;
+	}
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Clear event flag bits
+ * Input: x0 = event flag ID, x1 = clear pattern (inverted mask)
+ * Output: x0 = E_OK or error
+ */
+static ER svc_clr_flg(SVC_REGS *regs)
+{
+	ID flgid = (ID)regs->x0;
+	UW clrptn = (UW)regs->x1;
+	FLGCB *flg = NULL;
+	INT i;
+
+	/* Find event flag */
+	for (i = 0; i < MAX_EVENTFLAGS; i++) {
+		if (eventflag_table[i].flgid == flgid) {
+			flg = &eventflag_table[i];
+			break;
+		}
+	}
+
+	if (flg == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Clear the bits (clrptn is an inverted mask) */
+	flg->flgptn &= clrptn;
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Wait for event flag
+ * Input: x0 = event flag ID, x1 = wait pattern, x2 = wait mode
+ * Output: x0 = E_OK or error
+ */
+static ER svc_wai_flg(SVC_REGS *regs)
+{
+	ID flgid = (ID)regs->x0;
+	UW waiptn = (UW)regs->x1;
+	UW wfmode = (UW)regs->x2;
+	FLGCB *flg = NULL;
+	TCB *current;
+	TCB **queue_ptr;
+	INT i;
+	UW match;
+
+	/* Find event flag */
+	for (i = 0; i < MAX_EVENTFLAGS; i++) {
+		if (eventflag_table[i].flgid == flgid) {
+			flg = &eventflag_table[i];
+			break;
+		}
+	}
+
+	if (flg == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Check if condition is already satisfied */
+	if (wfmode & TWF_ORW) {
+		/* OR wait: at least one bit must match */
+		match = flg->flgptn & waiptn;
+	} else {
+		/* AND wait: all bits must match */
+		match = (flg->flgptn & waiptn) == waiptn;
+	}
+
+	if (match) {
+		/* Condition already satisfied */
+		if (wfmode & TWF_CLR) {
+			/* Clear matched bits */
+			if (wfmode & TWF_ORW) {
+				/* OR wait: clear only the matched bits */
+				flg->flgptn &= ~(flg->flgptn & waiptn);
+			} else {
+				/* AND wait: clear all waited bits */
+				flg->flgptn &= ~waiptn;
+			}
+		}
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* Condition not satisfied, put task in wait queue */
+	current = (TCB *)ctxtsk;
+	if (current == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Add to end of wait queue */
+	current->state = TS_WAIT;
+	current->wait_next = NULL;
+	current->wait_obj = flg;
+	current->wait_flgptn = waiptn;
+	current->wait_mode = wfmode;
+
+	if (flg->wait_queue == NULL) {
+		flg->wait_queue = current;
+	} else {
+		/* Find end of queue */
+		queue_ptr = &flg->wait_queue;
+		while (*queue_ptr != NULL && (*queue_ptr)->wait_next != NULL) {
+			queue_ptr = &((*queue_ptr)->wait_next);
+		}
+		(*queue_ptr)->wait_next = current;
+	}
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
  * System call handler (called from assembly)
  * x0 = SVC number
  * x1 = pointer to saved register context
@@ -774,6 +1032,18 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 		break;
 	case SVC_UNL_MTX:
 		svc_unl_mtx(regs);
+		break;
+	case SVC_CRE_FLG:
+		svc_cre_flg(regs);
+		break;
+	case SVC_SET_FLG:
+		svc_set_flg(regs);
+		break;
+	case SVC_CLR_FLG:
+		svc_clr_flg(regs);
+		break;
+	case SVC_WAI_FLG:
+		svc_wai_flg(regs);
 		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
@@ -904,6 +1174,62 @@ static inline ER tk_unl_mtx(ID mtxid)
 	return (ER)ret;
 }
 
+/* Create event flag */
+static inline ID tk_cre_flg(UW iflgptn)
+{
+	register UW64 ret __asm__("x0") = iflgptn;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(ret)
+		: "i"(SVC_CRE_FLG)
+		: "memory"
+	);
+	return (ID)ret;
+}
+
+/* Set event flag bits */
+static inline ER tk_set_flg(ID flgid, UW setptn)
+{
+	register UW64 ret __asm__("x0") = flgid;
+	register UW64 ptn __asm__("x1") = setptn;
+	__asm__ volatile(
+		"svc %2"
+		: "+r"(ret)
+		: "r"(ptn), "i"(SVC_SET_FLG)
+		: "memory"
+	);
+	return (ER)ret;
+}
+
+/* Clear event flag bits */
+static inline ER tk_clr_flg(ID flgid, UW clrptn)
+{
+	register UW64 ret __asm__("x0") = flgid;
+	register UW64 ptn __asm__("x1") = clrptn;
+	__asm__ volatile(
+		"svc %2"
+		: "+r"(ret)
+		: "r"(ptn), "i"(SVC_CLR_FLG)
+		: "memory"
+	);
+	return (ER)ret;
+}
+
+/* Wait for event flag */
+static inline ER tk_wai_flg(ID flgid, UW waiptn, UW wfmode)
+{
+	register UW64 ret __asm__("x0") = flgid;
+	register UW64 ptn __asm__("x1") = waiptn;
+	register UW64 mode __asm__("x2") = wfmode;
+	__asm__ volatile(
+		"svc %3"
+		: "+r"(ret)
+		: "r"(ptn), "r"(mode), "i"(SVC_WAI_FLG)
+		: "memory"
+	);
+	return (ER)ret;
+}
+
 /*
  * MMU Setup Functions
  */
@@ -1026,16 +1352,13 @@ static void init_mmu(void)
 }
 
 /*
- * Demo task functions - Producer/Consumer with Semaphore
+ * Demo task functions - Event Flag demonstration
  */
-/* Shared resource protected by mutex */
-static volatile INT shared_counter = 0;
-
 static void task1_main(INT stacd, void *exinf)
 {
 	ID tid;
 	UW64 time;
-	INT local_value;
+	INT count = 0;
 
 	(void)stacd;
 	(void)exinf;
@@ -1043,33 +1366,37 @@ static void task1_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	uart_puts("[Task1] Started\n");
+	uart_puts("[Task1] Event flag setter started\n");
 
 	while (1) {
-		/* Lock mutex before accessing shared resource */
-		uart_puts("[Task1] Locking mutex...\n");
-		tk_loc_mtx(demo_mtx);
+		/* Simulate work */
+		for (volatile int i = 0; i < 300000; i++);
 
-		/* Critical section - access shared resource */
-		uart_puts("[Task1] Entered critical section\n");
 		time = tk_get_tim();
+		count++;
 
-		/* Read, modify, write shared counter */
-		local_value = shared_counter;
-		for (volatile int i = 0; i < 100000; i++);  /* Simulate work */
-		shared_counter = local_value + 1;
+		/* Set different event flags */
+		if (count % 3 == 1) {
+			/* Set bit 0 (0x01) */
+			uart_puts("[Task1] Setting flag bit 0 at ");
+			uart_puthex((UW)time);
+			uart_puts("ms\n");
+			tk_set_flg(demo_flg, 0x01);
+		} else if (count % 3 == 2) {
+			/* Set bit 1 (0x02) */
+			uart_puts("[Task1] Setting flag bit 1 at ");
+			uart_puthex((UW)time);
+			uart_puts("ms\n");
+			tk_set_flg(demo_flg, 0x02);
+		} else {
+			/* Set bit 2 (0x04) */
+			uart_puts("[Task1] Setting flag bit 2 at ");
+			uart_puthex((UW)time);
+			uart_puts("ms\n");
+			tk_set_flg(demo_flg, 0x04);
+		}
 
-		uart_puts("[Task1] Counter=");
-		uart_puthex((UW)shared_counter);
-		uart_puts(" at ");
-		uart_puthex((UW)time);
-		uart_puts("ms\n");
-
-		/* Unlock mutex */
-		uart_puts("[Task1] Unlocking mutex\n");
-		tk_unl_mtx(demo_mtx);
-
-		/* Do some work outside critical section */
+		/* Wait before next set */
 		for (volatile int i = 0; i < 500000; i++);
 	}
 }
@@ -1078,7 +1405,7 @@ static void task2_main(INT stacd, void *exinf)
 {
 	ID tid;
 	UW64 time;
-	INT local_value;
+	INT count = 0;
 
 	(void)stacd;
 	(void)exinf;
@@ -1086,34 +1413,41 @@ static void task2_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	uart_puts("[Task2] Started\n");
+	uart_puts("[Task2] Event flag waiter started\n");
 
 	while (1) {
-		/* Lock mutex before accessing shared resource */
-		uart_puts("[Task2] Locking mutex...\n");
-		tk_loc_mtx(demo_mtx);
-
-		/* Critical section - access shared resource */
-		uart_puts("[Task2] Entered critical section\n");
+		count++;
 		time = tk_get_tim();
 
-		/* Read, modify, write shared counter */
-		local_value = shared_counter;
-		for (volatile int i = 0; i < 150000; i++);  /* Simulate work */
-		shared_counter = local_value + 10;
+		if (count % 2 == 1) {
+			/* Wait for bit 0 OR bit 1 (with auto-clear) */
+			uart_puts("[Task2] Waiting for bit 0 OR bit 1 (TWF_ORW|TWF_CLR) at ");
+			uart_puthex((UW)time);
+			uart_puts("ms\n");
+			tk_wai_flg(demo_flg, 0x03, TWF_ORW | TWF_CLR);
 
-		uart_puts("[Task2] Counter=");
-		uart_puthex((UW)shared_counter);
-		uart_puts(" at ");
-		uart_puthex((UW)time);
-		uart_puts("ms\n");
+			time = tk_get_tim();
+			uart_puts("[Task2] Woken up! (OR condition satisfied) at ");
+			uart_puthex((UW)time);
+			uart_puts("ms\n");
+		} else {
+			/* Wait for bit 2 (without auto-clear) */
+			uart_puts("[Task2] Waiting for bit 2 (TWF_ANDW) at ");
+			uart_puthex((UW)time);
+			uart_puts("ms\n");
+			tk_wai_flg(demo_flg, 0x04, TWF_ANDW);
 
-		/* Unlock mutex */
-		uart_puts("[Task2] Unlocking mutex\n");
-		tk_unl_mtx(demo_mtx);
+			time = tk_get_tim();
+			uart_puts("[Task2] Woken up! (AND condition satisfied) at ");
+			uart_puthex((UW)time);
+			uart_puts("ms\n");
 
-		/* Do some work outside critical section */
-		for (volatile int i = 0; i < 700000; i++);
+			/* Manually clear bit 2 */
+			tk_clr_flg(demo_flg, ~0x04);
+		}
+
+		/* Simulate processing */
+		for (volatile int i = 0; i < 500000; i++);
 	}
 }
 
@@ -1274,6 +1608,18 @@ void kernel_main(void)
 	demo_mtx = tk_cre_mtx();
 	uart_puts("Demo mutex created: ID=");
 	uart_puthex((UW)demo_mtx);
+	uart_puts("\n");
+
+	/* Initialize event flags */
+	uart_puts("Initializing event flags...\n");
+	for (INT i = 0; i < MAX_EVENTFLAGS; i++) {
+		eventflag_table[i].flgid = 0;
+	}
+
+	/* Create demo event flag (initial pattern = 0) */
+	demo_flg = tk_cre_flg(0);
+	uart_puts("Demo event flag created: ID=");
+	uart_puthex((UW)demo_flg);
 	uart_puts("\n\n");
 
 	/* Initialize tasks */
