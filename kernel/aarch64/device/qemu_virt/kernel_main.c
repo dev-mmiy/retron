@@ -383,8 +383,22 @@ static void init_mmu(void)
 {
 	UW64 mair, tcr, sctlr;
 
+	/* Ensure MMU is disabled before configuring */
+	__asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
+	sctlr &= ~(SCTLR_M | SCTLR_C);  /* Disable MMU and D-cache */
+	__asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr));
+	__asm__ volatile("isb");
+
+	/* Invalidate TLB */
+	__asm__ volatile("tlbi vmalle1");
+	__asm__ volatile("dsb sy");
+	__asm__ volatile("isb");
+
 	/* Setup page tables */
 	setup_page_tables();
+
+	/* Data Synchronization Barrier - ensure page tables are written */
+	__asm__ volatile("dsb sy");
 
 	/*
 	 * Configure MAIR_EL1 (Memory Attribute Indirection Register)
@@ -425,14 +439,16 @@ static void init_mmu(void)
 	__asm__ volatile("msr ttbr0_el1, %0" :: "r"((UW64)page_tables_l0));
 	__asm__ volatile("msr ttbr1_el1, %0" :: "r"((UW64)page_tables_l0));
 
-	/* Instruction Synchronization Barrier */
+	/* Synchronization barriers before enabling MMU */
+	__asm__ volatile("dsb sy");
 	__asm__ volatile("isb");
 
 	/*
-	 * Enable MMU, I-cache, and D-cache in SCTLR_EL1
+	 * Enable MMU and I-cache in SCTLR_EL1
+	 * Note: Enabling D-cache separately to isolate issues
 	 */
 	__asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
-	sctlr |= SCTLR_M | SCTLR_C | SCTLR_I;
+	sctlr |= SCTLR_M | SCTLR_I | SCTLR_C;  /* Enable MMU, I-cache, and D-cache */
 	__asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr));
 
 	/* Instruction Synchronization Barrier */
