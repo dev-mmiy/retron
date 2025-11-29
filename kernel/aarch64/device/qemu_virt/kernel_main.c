@@ -357,92 +357,64 @@ static void setup_page_tables(void)
  */
 static void init_mmu(void)
 {
-	UW64 mair, tcr, sctlr;
+	UW64 mair, tcr, sctlr, mmfr0;
+	UW parange;
 
-	uart_puts("  [1] Disabling MMU...\n");
 	/* Ensure MMU is disabled before configuring */
 	__asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
-	sctlr &= ~(SCTLR_M | SCTLR_C);  /* Disable MMU and D-cache */
+	sctlr &= ~(SCTLR_M | SCTLR_C | SCTLR_I);  /* Disable MMU and caches */
 	__asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr));
 	__asm__ volatile("isb");
 
-	uart_puts("  [2] Invalidating TLB...\n");
 	/* Invalidate TLB */
 	__asm__ volatile("tlbi vmalle1");
 	__asm__ volatile("dsb sy");
 	__asm__ volatile("isb");
 
-	uart_puts("  [3] Setting up page tables...\n");
 	/* Setup page tables */
 	setup_page_tables();
-
-	/* Data Synchronization Barrier - ensure page tables are written */
 	__asm__ volatile("dsb sy");
 
-	uart_puts("  [4] Configuring MAIR_EL1...\n");
 	/*
 	 * Configure MAIR_EL1 (Memory Attribute Indirection Register)
-	 * Define memory types for indices 0, 1, 2
+	 * Index 0: Device-nGnRnE
+	 * Index 1: Normal memory, non-cacheable
+	 * Index 2: Normal memory, write-back cacheable
 	 */
 	mair = ((UW64)MAIR_DEVICE_nGnRnE << (MAIR_IDX_DEVICE_nGnRnE * 8))
 	     | ((UW64)MAIR_NORMAL_NC << (MAIR_IDX_NORMAL_NC * 8))
 	     | ((UW64)MAIR_NORMAL << (MAIR_IDX_NORMAL * 8));
-
 	__asm__ volatile("msr mair_el1, %0" :: "r"(mair));
 
-	uart_puts("  [5] Configuring TCR_EL1...\n");
 	/*
-	 * Read CPU capabilities
+	 * Read CPU capabilities and configure TCR_EL1
 	 */
-	UW64 mmfr0;
-	UW parange;
 	__asm__ volatile("mrs %0, id_aa64mmfr0_el1" : "=r"(mmfr0));
-	parange = mmfr0 & 0xF;  /* Bits[3:0] = PARange */
-
-	uart_puts("    CPU PARange: ");
-	uart_puthex(parange);
-	uart_puts("\n");
+	parange = mmfr0 & 0xF;  /* Physical address range */
 
 	/*
-	 * Configure TCR_EL1 (Translation Control Register)
-	 * Using conservative settings:
-	 * - T0SZ=16: 48-bit VA for TTBR0_EL1 (256TB) - maximum for 4-level
-	 * - No TTBR1 (only use TTBR0)
+	 * TCR_EL1 configuration:
+	 * - T0SZ=16: 48-bit VA (standard)
 	 * - TG0=4KB: 4KB granule
-	 * - IPS from CPU capabilities
-	 * - Non-shareable, non-cacheable for simplicity
+	 * - IPS: from CPU capabilities
 	 */
-	tcr = TCR_T0SZ(16)           /* 48-bit VA */
-	    | TCR_TG0_4KB            /* 4KB granule */
-	    | (parange << 32);       /* IPS from CPU */
-
+	tcr = TCR_T0SZ(16) | TCR_TG0_4KB | (parange << 32);
 	__asm__ volatile("msr tcr_el1, %0" :: "r"(tcr));
 
-	uart_puts("  [6] Setting TTBR0...\n");
-	/*
-	 * Set TTBR0_EL1 to point to L0 page table
-	 * (Not using TTBR1 for simplicity)
-	 */
+	/* Set TTBR0_EL1 to page table base */
 	__asm__ volatile("msr ttbr0_el1, %0" :: "r"((UW64)page_tables_l0));
 
-	uart_puts("  [7] Synchronization barriers...\n");
-	/* Synchronization barriers before enabling MMU */
+	/* Synchronization barriers */
 	__asm__ volatile("dsb sy");
 	__asm__ volatile("isb");
 
-	uart_puts("  [8] Enabling MMU...\n");
 	/*
-	 * Enable MMU only (no caches for now to isolate the issue)
+	 * Enable MMU, instruction cache, and data cache
 	 */
 	__asm__ volatile("mrs %0, sctlr_el1" : "=r"(sctlr));
-	sctlr |= SCTLR_M;  /* Enable MMU only, no caches */
+	sctlr |= SCTLR_M | SCTLR_C | SCTLR_I;
 	__asm__ volatile("msr sctlr_el1, %0" :: "r"(sctlr));
-
-	uart_puts("  [9] ISB after MMU enable...\n");
-	/* Instruction Synchronization Barrier */
 	__asm__ volatile("isb");
-
-	uart_puts("  [10] MMU enabled successfully!\n");
 }
 
 /*
@@ -586,23 +558,11 @@ void kernel_main(void)
 	uart_puthex(cnt);
 	uart_puts("\n");
 
-	/* Read ID_AA64MMFR0_EL1 for MMU features */
-	__asm__ volatile("mrs %0, id_aa64mmfr0_el1" : "=r"(cnt));
-	uart_puts("MMU Features (ID_AA64MMFR0_EL1): ");
-	uart_puthex(cnt);
-	uart_puts("\n");
-	uart_puts("  PARange: ");
-	uart_puthex(cnt & 0xF);
-	uart_puts(" (bits[3:0])\n");
-	uart_puts("  TGran4: ");
-	uart_puthex((cnt >> 28) & 0xF);
-	uart_puts(" (bits[31:28])\n");
 	uart_puts("\n");
 
-	/* Initialize MMU - Re-enabled with CPU feature detection */
-	uart_puts("Initializing MMU...\n");
+	/* Initialize MMU with CPU feature detection */
 	init_mmu();
-	uart_puts("MMU enabled (identity mapping).\n");
+	uart_puts("MMU enabled with I-cache and D-cache.\n");
 	uart_puts("\n");
 
 	uart_puts("T-Kernel initialization complete.\n");
