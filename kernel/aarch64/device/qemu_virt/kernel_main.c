@@ -301,15 +301,15 @@ static void schedule(void)
  */
 
 /*
- * Setup page tables for identity mapping
+ * Setup page tables for identity mapping using 1GB blocks at Level 1
+ * Much simpler than using Level 2 tables
  * Maps:
- *   - 0x00000000-0x0FFFFFFF (256MB): Device memory for peripherals
- *   - 0x40000000-0x47FFFFFF (128MB): Normal cacheable memory for RAM
+ *   - 0x00000000-0x3FFFFFFF (1GB): Device memory (includes UART, GIC, etc.)
+ *   - 0x40000000-0x7FFFFFFF (1GB): Normal cacheable memory (RAM)
  */
 static void setup_page_tables(void)
 {
 	INT i;
-	UW64 addr;
 
 	/* Clear all page tables */
 	for (i = 0; i < L0_ENTRIES; i++) {
@@ -317,10 +317,6 @@ static void setup_page_tables(void)
 	}
 	for (i = 0; i < L1_ENTRIES; i++) {
 		page_tables_l1[i] = 0;
-	}
-	for (i = 0; i < L2_ENTRIES; i++) {
-		page_tables_l2_ram[i] = 0;
-		page_tables_l2_dev[i] = 0;
 	}
 
 	/*
@@ -330,50 +326,30 @@ static void setup_page_tables(void)
 	page_tables_l0[0] = (UW64)page_tables_l1 | PTE_VALID | PTE_TABLE;
 
 	/*
-	 * Level 1: Each entry covers 1GB
-	 * Entry 0: 0x00000000-0x3FFFFFFF (1GB) - Device memory region
-	 * Entry 1: 0x40000000-0x7FFFFFFF (1GB) - RAM region
+	 * Level 1: Use 1GB block descriptors (simpler, no Level 2 needed)
+	 * Entry 0: 0x00000000-0x3FFFFFFF (1GB) - Device memory
+	 * Entry 1: 0x40000000-0x7FFFFFFF (1GB) - Normal memory (RAM)
 	 */
 
-	/* Entry 0: Point to L2 table for device memory */
-	page_tables_l1[0] = (UW64)page_tables_l2_dev | PTE_VALID | PTE_TABLE;
+	/* Entry 0: 1GB block for device memory (0x00000000-0x3FFFFFFF) */
+	page_tables_l1[0] = 0x00000000ULL
+		| PTE_VALID
+		| PTE_BLOCK
+		| PTE_ATTR_IDX(MAIR_IDX_DEVICE_nGnRnE)
+		| PTE_AP_RW_EL1
+		| PTE_SH_OUTER
+		| PTE_AF
+		| PTE_PXN
+		| PTE_UXN;
 
-	/* Entry 1: Point to L2 table for RAM */
-	page_tables_l1[1] = (UW64)page_tables_l2_ram | PTE_VALID | PTE_TABLE;
-
-	/*
-	 * Level 2 for device memory (0x00000000-0x3FFFFFFF)
-	 * Each entry covers 2MB
-	 * Map first 256MB (0x00000000-0x0FFFFFFF) as device memory
-	 */
-	for (i = 0; i < 128; i++) {  /* 128 entries * 2MB = 256MB */
-		addr = (UW64)i * 0x200000;  /* 2MB blocks */
-		page_tables_l2_dev[i] = addr
-			| PTE_VALID
-			| PTE_BLOCK
-			| PTE_ATTR_IDX(MAIR_IDX_DEVICE_nGnRnE)
-			| PTE_AP_RW_EL1
-			| PTE_SH_OUTER
-			| PTE_AF
-			| PTE_PXN
-			| PTE_UXN;
-	}
-
-	/*
-	 * Level 2 for RAM (0x40000000-0x7FFFFFFF)
-	 * Each entry covers 2MB
-	 * Map 128MB (0x40000000-0x47FFFFFF) as normal cacheable memory
-	 */
-	for (i = 0; i < 64; i++) {  /* 64 entries * 2MB = 128MB */
-		addr = 0x40000000ULL + ((UW64)i * 0x200000);  /* 2MB blocks starting at 0x40000000 */
-		page_tables_l2_ram[i] = addr
-			| PTE_VALID
-			| PTE_BLOCK
-			| PTE_ATTR_IDX(MAIR_IDX_NORMAL)
-			| PTE_AP_RW_EL1
-			| PTE_SH_INNER
-			| PTE_AF;
-	}
+	/* Entry 1: 1GB block for RAM (0x40000000-0x7FFFFFFF) */
+	page_tables_l1[1] = 0x40000000ULL
+		| PTE_VALID
+		| PTE_BLOCK
+		| PTE_ATTR_IDX(MAIR_IDX_NORMAL)
+		| PTE_AP_RW_EL1
+		| PTE_SH_INNER
+		| PTE_AF;
 }
 
 /*
