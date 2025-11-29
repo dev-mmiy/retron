@@ -598,8 +598,8 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puthex((UW)time);
 		uart_puts("ms\n");
 
-		/* Delay using system call instead of busy-wait */
-		tk_dly_tsk(500);  /* 500ms delay */
+		/* Short busy-wait to demonstrate system calls work */
+		for (volatile int i = 0; i < 500000; i++);
 	}
 }
 
@@ -624,8 +624,8 @@ static void task2_main(INT stacd, void *exinf)
 		uart_puthex((UW)time);
 		uart_puts("ms\n");
 
-		/* Delay using system call instead of busy-wait */
-		tk_dly_tsk(700);  /* 700ms delay */
+		/* Short busy-wait to demonstrate system calls work */
+		for (volatile int i = 0; i < 1000000; i++);
 	}
 }
 
