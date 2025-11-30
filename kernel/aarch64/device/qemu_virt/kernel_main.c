@@ -190,6 +190,34 @@ static INT next_mbfid = 1;	/* Next message buffer ID to allocate */
 /* Shared message buffer for demo */
 static ID demo_mbf = 0;		/* Will be initialized in kernel_main */
 
+/*
+ * Message Header for Mailbox
+ */
+typedef struct t_msg {
+	struct t_msg	*next;		/* Next message in queue */
+	INT		msgpri;		/* Message priority (higher = more urgent) */
+	/* User data follows this header */
+} T_MSG;
+
+/*
+ * Mailbox Control Block
+ */
+typedef struct {
+	ID	mbxid;		/* Mailbox ID */
+	T_MSG	*msg_queue;	/* Queue of messages (priority-ordered) */
+	TCB	*recv_queue;	/* Queue of receiving tasks (mailbox empty) */
+} MBXCB;
+
+/*
+ * Mailbox management
+ */
+#define MAX_MAILBOXES	4
+static MBXCB mailbox_table[MAX_MAILBOXES];
+static INT next_mbxid = 1;	/* Next mailbox ID to allocate */
+
+/* Shared mailbox for demo */
+static ID demo_mbx_comm = 0;	/* Will be initialized in kernel_main */
+
 /* Task stacks (1KB each) */
 #define TASK_STACK_SIZE	1024
 static UW64 task1_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(16)));
@@ -423,6 +451,9 @@ static void schedule(void)
 #define SVC_CRE_MBF		15	/* Create message buffer */
 #define SVC_SND_MBF		16	/* Send message to buffer */
 #define SVC_RCV_MBF		17	/* Receive message from buffer */
+#define SVC_CRE_MBX		18	/* Create mailbox */
+#define SVC_SND_MBX		19	/* Send message to mailbox */
+#define SVC_RCV_MBX		20	/* Receive message from mailbox */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -1311,6 +1342,173 @@ static ER svc_rcv_mbf(SVC_REGS *regs)
 }
 
 /*
+ * System call: Create mailbox
+ * Returns: mailbox ID in x0 (or error)
+ */
+static ER svc_cre_mbx(SVC_REGS *regs)
+{
+	MBXCB *mbx = NULL;
+	INT i;
+
+	/* Find free mailbox */
+	for (i = 0; i < MAX_MAILBOXES; i++) {
+		if (mailbox_table[i].mbxid == 0) {
+			mbx = &mailbox_table[i];
+			break;
+		}
+	}
+
+	if (mbx == NULL) {
+		regs->x0 = -1;  /* No free mailbox */
+		return -1;
+	}
+
+	/* Initialize mailbox */
+	mbx->mbxid = next_mbxid++;
+	mbx->msg_queue = NULL;
+	mbx->recv_queue = NULL;
+
+	regs->x0 = mbx->mbxid;
+	return E_OK;
+}
+
+/*
+ * System call: Send message to mailbox
+ * Arguments: x0 = mbxid, x1 = message pointer (T_MSG*)
+ * Returns: E_OK or error in x0
+ */
+static ER svc_snd_mbx(SVC_REGS *regs)
+{
+	ID mbxid = (ID)regs->x0;
+	T_MSG *msg = (T_MSG *)regs->x1;
+	MBXCB *mbx = NULL;
+	TCB *recv_task;
+	T_MSG **msg_ptr;
+	INT i;
+
+	/* Find mailbox */
+	for (i = 0; i < MAX_MAILBOXES; i++) {
+		if (mailbox_table[i].mbxid == mbxid) {
+			mbx = &mailbox_table[i];
+			break;
+		}
+	}
+
+	if (mbx == NULL || msg == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Check if there's a task waiting to receive */
+	if (mbx->recv_queue != NULL) {
+		/* Direct transfer to waiting task */
+		recv_task = mbx->recv_queue;
+		mbx->recv_queue = recv_task->wait_next;
+
+		/* Set message pointer in receiver's return value (x0) via saved register context */
+		if (recv_task->wait_regs != NULL) {
+			SVC_REGS *recv_regs = (SVC_REGS *)recv_task->wait_regs;
+			recv_regs->x0 = (UW64)msg;
+		}
+
+		/* Wake up receiver */
+		recv_task->state = TS_READY;
+		recv_task->wait_next = NULL;
+		recv_task->wait_obj = NULL;
+		recv_task->wait_regs = NULL;
+
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* Add message to queue in priority order (higher priority first) */
+	msg->next = NULL;
+
+	if (mbx->msg_queue == NULL) {
+		/* Queue is empty, add as first message */
+		mbx->msg_queue = msg;
+	} else {
+		/* Find insertion point based on priority */
+		msg_ptr = &mbx->msg_queue;
+		while (*msg_ptr != NULL && (*msg_ptr)->msgpri >= msg->msgpri) {
+			msg_ptr = &((*msg_ptr)->next);
+		}
+		/* Insert message */
+		msg->next = *msg_ptr;
+		*msg_ptr = msg;
+	}
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Receive message from mailbox
+ * Arguments: x0 = mbxid, x1 = pointer to receive message pointer (T_MSG**)
+ * Returns: message pointer in x0 (or error)
+ */
+static ER svc_rcv_mbx(SVC_REGS *regs)
+{
+	ID mbxid = (ID)regs->x0;
+	MBXCB *mbx = NULL;
+	TCB *current;
+	TCB **queue_ptr;
+	T_MSG *msg;
+	INT i;
+
+	/* Find mailbox */
+	for (i = 0; i < MAX_MAILBOXES; i++) {
+		if (mailbox_table[i].mbxid == mbxid) {
+			mbx = &mailbox_table[i];
+			break;
+		}
+	}
+
+	if (mbx == NULL) {
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Check if mailbox has messages */
+	if (mbx->msg_queue == NULL) {
+		/* Mailbox empty, add to receive queue */
+		current = (TCB *)ctxtsk;
+		if (current == NULL) {
+			regs->x0 = -1;
+			return -1;
+		}
+
+		current->state = TS_WAIT;
+		current->wait_next = NULL;
+		current->wait_obj = (void *)mbx;
+		current->wait_regs = (void *)regs; /* Store register context for return value */
+
+		/* Add to end of recv queue */
+		if (mbx->recv_queue == NULL) {
+			mbx->recv_queue = current;
+		} else {
+			queue_ptr = &mbx->recv_queue;
+			while (*queue_ptr != NULL && (*queue_ptr)->wait_next != NULL) {
+				queue_ptr = &((*queue_ptr)->wait_next);
+			}
+			(*queue_ptr)->wait_next = current;
+		}
+
+		/* Don't set x0 here - it will be set when task is woken up */
+		return E_OK;
+	}
+
+	/* Get message from queue (highest priority first) */
+	msg = mbx->msg_queue;
+	mbx->msg_queue = msg->next;
+	msg->next = NULL;
+
+	/* Return message pointer */
+	regs->x0 = (UW64)msg;
+	return E_OK;
+}
+
+/*
  * System call handler (called from assembly)
  * x0 = SVC number
  * x1 = pointer to saved register context
@@ -1368,6 +1566,15 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 		break;
 	case SVC_RCV_MBF:
 		svc_rcv_mbf(regs);
+		break;
+	case SVC_CRE_MBX:
+		svc_cre_mbx(regs);
+		break;
+	case SVC_SND_MBX:
+		svc_snd_mbx(regs);
+		break;
+	case SVC_RCV_MBX:
+		svc_rcv_mbx(regs);
 		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
@@ -1597,6 +1804,46 @@ static inline INT tk_rcv_mbf(ID mbfid, void *msg)
 	return (INT)ret;
 }
 
+/* Create mailbox */
+static inline ID tk_cre_mbx(void)
+{
+	register UW64 ret __asm__("x0");
+	__asm__ volatile(
+		"svc %1"
+		: "=r"(ret)
+		: "i"(SVC_CRE_MBX)
+		: "memory"
+	);
+	return (ID)ret;
+}
+
+/* Send message to mailbox */
+static inline ER tk_snd_mbx(ID mbxid, T_MSG *msg)
+{
+	register UW64 ret __asm__("x0") = mbxid;
+	register UW64 msgptr __asm__("x1") = (UW64)msg;
+	__asm__ volatile(
+		"svc %2"
+		: "+r"(ret)
+		: "r"(msgptr), "i"(SVC_SND_MBX)
+		: "memory"
+	);
+	return (ER)ret;
+}
+
+/* Receive message from mailbox */
+static inline T_MSG* tk_rcv_mbx(ID mbxid)
+{
+	register UW64 ret __asm__("x0") = mbxid;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(ret)
+		: "i"(SVC_RCV_MBX)
+		: "memory"
+	);
+	return (T_MSG*)ret;
+}
+
 /*
  * MMU Setup Functions
  */
@@ -1719,15 +1966,29 @@ static void init_mmu(void)
 }
 
 /*
- * Demo task functions - Event Flag demonstration
+ * Demo task functions - Mailbox demonstration with priority messages
  */
+
+/* Custom message structure extending T_MSG */
+typedef struct {
+	T_MSG	header;		/* Message header (must be first) */
+	UW	sequence;	/* Message sequence number */
+	UW	timestamp;	/* Timestamp when message was created */
+	UW	value;		/* Data value */
+} MY_MSG;
+
+/* Static message storage for demo (3 messages) */
+static MY_MSG msg_storage[3];
+static INT next_msg_idx = 0;
+
 static void task1_main(INT stacd, void *exinf)
 {
 	ID tid;
 	UW64 time;
 	INT count = 0;
-	UW msg_data[16];  /* Message buffer (up to 64 bytes) */
+	MY_MSG *msg;
 	ER err;
+	INT priority;
 
 	(void)stacd;
 	(void)exinf;
@@ -1735,7 +1996,7 @@ static void task1_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	uart_puts("[Task1] Message producer started\n");
+	uart_puts("[Task1] Mailbox sender started\n");
 
 	while (1) {
 		/* Simulate work - generate data */
@@ -1744,21 +2005,31 @@ static void task1_main(INT stacd, void *exinf)
 		time = tk_get_tim();
 		count++;
 
-		/* Prepare message with different content */
-		msg_data[0] = count;         /* Message sequence number */
-		msg_data[1] = (UW)time;      /* Timestamp */
-		msg_data[2] = count * 10;    /* Data value */
+		/* Get next message from pool */
+		msg = &msg_storage[next_msg_idx];
+		next_msg_idx = (next_msg_idx + 1) % 3;
+
+		/* Assign priority: every 3rd message gets high priority (3), others get low priority (1) */
+		priority = (count % 3 == 0) ? 3 : 1;
+
+		/* Prepare message */
+		msg->header.msgpri = priority;
+		msg->sequence = count;
+		msg->timestamp = (UW)time;
+		msg->value = count * 10;
 
 		/* Send message */
 		uart_puts("[Task1] Sending message #");
 		uart_puthex(count);
-		uart_puts(" (value=");
+		uart_puts(" priority=");
+		uart_puthex(priority);
+		uart_puts(" value=");
 		uart_puthex(count * 10);
-		uart_puts(") at ");
+		uart_puts(" at ");
 		uart_puthex((UW)time);
 		uart_puts("ms\n");
 
-		err = tk_snd_mbf(demo_mbf, msg_data, 12);  /* Send 12 bytes (3 words) */
+		err = tk_snd_mbx(demo_mbx_comm, (T_MSG*)msg);
 		if (err == E_OK) {
 			uart_puts("[Task1] Message sent successfully\n");
 		} else {
@@ -1774,8 +2045,7 @@ static void task2_main(INT stacd, void *exinf)
 {
 	ID tid;
 	UW64 time;
-	UW msg_data[16];  /* Message buffer (up to 64 bytes) */
-	INT rcv_size;
+	MY_MSG *msg;
 
 	(void)stacd;
 	(void)exinf;
@@ -1783,7 +2053,7 @@ static void task2_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	uart_puts("[Task2] Message consumer started\n");
+	uart_puts("[Task2] Mailbox receiver started\n");
 
 	while (1) {
 		time = tk_get_tim();
@@ -1793,26 +2063,26 @@ static void task2_main(INT stacd, void *exinf)
 		uart_puthex((UW)time);
 		uart_puts("ms...\n");
 
-		rcv_size = tk_rcv_mbf(demo_mbf, msg_data);
+		msg = (MY_MSG*)tk_rcv_mbx(demo_mbx_comm);
 
 		time = tk_get_tim();
 
-		if (rcv_size > 0) {
+		if (msg != NULL) {
 			uart_puts("[Task2] Received message at ");
 			uart_puthex((UW)time);
 			uart_puts("ms:\n");
+			uart_puts("  Priority: ");
+			uart_puthex(msg->header.msgpri);
+			uart_puts("\n");
 			uart_puts("  Sequence: ");
-			uart_puthex(msg_data[0]);
+			uart_puthex(msg->sequence);
 			uart_puts("\n");
 			uart_puts("  Timestamp: ");
-			uart_puthex(msg_data[1]);
+			uart_puthex(msg->timestamp);
 			uart_puts("ms\n");
 			uart_puts("  Value: ");
-			uart_puthex(msg_data[2]);
+			uart_puthex(msg->value);
 			uart_puts("\n");
-			uart_puts("  Size: ");
-			uart_puthex(rcv_size);
-			uart_puts(" bytes\n");
 		} else {
 			uart_puts("[Task2] Receive failed\n");
 		}
@@ -2003,6 +2273,18 @@ void kernel_main(void)
 	demo_mbf = tk_cre_mbf(128, 64);
 	uart_puts("Demo message buffer created: ID=");
 	uart_puthex((UW)demo_mbf);
+	uart_puts("\n");
+
+	/* Initialize mailboxes */
+	uart_puts("Initializing mailboxes...\n");
+	for (INT i = 0; i < MAX_MAILBOXES; i++) {
+		mailbox_table[i].mbxid = 0;
+	}
+
+	/* Create demo mailbox */
+	demo_mbx_comm = tk_cre_mbx();
+	uart_puts("Demo mailbox created: ID=");
+	uart_puthex((UW)demo_mbx_comm);
 	uart_puts("\n\n");
 
 	/* Initialize tasks */
