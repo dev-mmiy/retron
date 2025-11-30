@@ -3763,6 +3763,60 @@ for (INT i = 0; i < MAX_MAILBOXES; i++) {
 - ポインタフィールドは必ずNULLに初期化する必要がある
 - メモリの破損問題は、**読み取り側**の初期化も確認する必要がある
 
+#### 継続調査：破損メッセージの診断と防御的対策
+
+**ローカルテストでの継続発見**:
+- mailbox_table初期化修正後もテストで破損メッセージが継続
+- パターンは依然として0x00400000
+- これは、未初期化ポインタ以外の根本原因があることを示唆
+
+**デバッグアプローチ**:
+
+1. **メッセージポインタ検証の追加** (kernel_main.c:1507-1527):
+```c
+/* Validate message pointer is within msg_storage array */
+if (msg < (T_MSG*)msg_storage || msg >= (T_MSG*)(msg_storage + MSG_POOL_SIZE)) {
+    uart_puts("ERROR: Invalid message pointer in mailbox queue\n");
+    mbx->msg_queue = NULL;  /* Reset to prevent further corruption */
+    return -1;
+}
+
+/* Validate next pointer before using it */
+if (msg->next != NULL &&
+    (msg->next < (T_MSG*)msg_storage || msg->next >= (T_MSG*)(msg_storage + MSG_POOL_SIZE))) {
+    uart_puts("WARNING: Invalid next pointer in message, setting to NULL\n");
+    msg->next = NULL;  /* Prevent propagation of invalid pointer */
+}
+```
+
+**目的**:
+- 破損がいつ・どこで発生するかを検出
+- 不正なポインタの伝播を防止
+- 診断情報を提供して根本原因を特定
+
+2. **明示的なヘッダーフィールド初期化** (alloc_message):
+```c
+/* Explicitly set critical fields to ensure proper initialization */
+msg->header.next = NULL;
+msg->header.msgpri = 0;
+msg->pool_index = i;
+```
+
+**目的**:
+- ゼロクリアに加えて、重要フィールドを明示的に初期化
+- コンパイラの最適化やアライメント問題に対する防御
+- `next`ポインタが確実にNULLになることを保証
+
+**仮説**:
+- 10個目のメッセージの`next`フィールドが何らかの理由でNULLでない
+- `rcv_mbx()`で`mbx->msg_queue = msg->next`を実行時、不正な値が伝播
+- 次回の`rcv_mbx()`で不正なアドレスから破損メッセージを読み取る
+
+**期待される結果**:
+- ポインタ検証により、どのメッセージのnextが不正かを特定
+- 明示的初期化により、nextが確実にNULLに設定される
+- 破損メッセージの完全な消失または診断情報の取得
+
 #### 技術的成果
 
 **メッセージプール管理**:
