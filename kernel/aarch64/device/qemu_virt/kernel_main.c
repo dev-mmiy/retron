@@ -1977,8 +1977,8 @@ typedef struct {
 	UW	value;		/* Data value */
 } MY_MSG;
 
-/* Static message storage for demo (increased to 20 messages to avoid reuse before consumption) */
-static MY_MSG msg_storage[20];
+/* Static message storage for demo (100 messages - large enough to avoid reuse during test) */
+static MY_MSG msg_storage[100];
 static INT next_msg_idx = 0;
 
 static void task1_main(INT stacd, void *exinf)
@@ -2007,7 +2007,7 @@ static void task1_main(INT stacd, void *exinf)
 
 		/* Get next message from pool */
 		msg = &msg_storage[next_msg_idx];
-		next_msg_idx = (next_msg_idx + 1) % 20;
+		next_msg_idx = (next_msg_idx + 1) % 100;
 
 		/* Assign priority: every 3rd message gets high priority (3), others get low priority (1) */
 		priority = (count % 3 == 0) ? 3 : 1;
