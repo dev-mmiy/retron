@@ -2107,7 +2107,9 @@ static MY_MSG* alloc_message(void)
 				((unsigned char*)msg)[j] = 0;
 			}
 
-			/* Set pool index after clearing */
+			/* Explicitly set critical fields to ensure proper initialization */
+			msg->header.next = NULL;
+			msg->header.msgpri = 0;
 			msg->pool_index = i;
 			return msg;
 		}
