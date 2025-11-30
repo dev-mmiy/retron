@@ -26,6 +26,9 @@ typedef int			INT;
 typedef int			ER;
 typedef int			ID;
 typedef unsigned long long	UD;
+typedef int			bool;
+#define true			1
+#define false			0
 
 /* Task entry point function type */
 typedef void (*TASK_FP)(INT, void*);
@@ -1586,6 +1589,90 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 }
 
 /*
+ * Kernel-space direct creation functions
+ * These can be called from kernel_main() without using SVC
+ */
+
+static ID direct_cre_sem(INT isemcnt, INT maxsem)
+{
+	INT i;
+	for (i = 0; i < MAX_SEMAPHORES; i++) {
+		if (semaphore_table[i].semid == 0) {
+			semaphore_table[i].semid = next_semid++;
+			semaphore_table[i].semcnt = isemcnt;
+			semaphore_table[i].maxsem = maxsem;
+			semaphore_table[i].wait_queue = NULL;
+			return semaphore_table[i].semid;
+		}
+	}
+	return -1;
+}
+
+static ID direct_cre_mtx(void)
+{
+	INT i;
+	for (i = 0; i < MAX_MUTEXES; i++) {
+		if (mutex_table[i].mtxid == 0) {
+			mutex_table[i].mtxid = next_mtxid++;
+			mutex_table[i].locked = 0;
+			mutex_table[i].owner = NULL;
+			mutex_table[i].wait_queue = NULL;
+			return mutex_table[i].mtxid;
+		}
+	}
+	return -1;
+}
+
+static ID direct_cre_flg(UW iflgptn)
+{
+	INT i;
+	for (i = 0; i < MAX_EVENTFLAGS; i++) {
+		if (eventflag_table[i].flgid == 0) {
+			eventflag_table[i].flgid = next_flgid++;
+			eventflag_table[i].flgptn = iflgptn;
+			eventflag_table[i].wait_queue = NULL;
+			return eventflag_table[i].flgid;
+		}
+	}
+	return -1;
+}
+
+static ID direct_cre_mbf(UW bufsz, UW maxmsz)
+{
+	INT i;
+	for (i = 0; i < MAX_MSGBUFFERS; i++) {
+		if (msgbuffer_table[i].mbfid == 0) {
+			static UW mbf_buffer[512];  /* Static buffer for demo */
+			msgbuffer_table[i].mbfid = next_mbfid++;
+			msgbuffer_table[i].bufsz = bufsz;
+			msgbuffer_table[i].maxmsz = maxmsz;
+			msgbuffer_table[i].buffer = mbf_buffer;
+			msgbuffer_table[i].head = 0;
+			msgbuffer_table[i].tail = 0;
+			msgbuffer_table[i].freesz = bufsz;
+			msgbuffer_table[i].send_queue = NULL;
+			msgbuffer_table[i].recv_queue = NULL;
+			return msgbuffer_table[i].mbfid;
+		}
+	}
+	return -1;
+}
+
+static ID direct_cre_mbx(void)
+{
+	INT i;
+	for (i = 0; i < MAX_MAILBOXES; i++) {
+		if (mailbox_table[i].mbxid == 0) {
+			mailbox_table[i].mbxid = next_mbxid++;
+			mailbox_table[i].msg_queue = NULL;
+			mailbox_table[i].recv_queue = NULL;
+			return mailbox_table[i].mbxid;
+		}
+	}
+	return -1;
+}
+
+/*
  * User-space system call wrappers
  * These functions invoke system calls using the SVC instruction
  */
@@ -1975,11 +2062,35 @@ typedef struct {
 	UW	sequence;	/* Message sequence number */
 	UW	timestamp;	/* Timestamp when message was created */
 	UW	value;		/* Data value */
+	INT	pool_index;	/* Index in message pool (for deallocation) */
 } MY_MSG;
 
-/* Static message storage for demo (100 messages - large enough to avoid reuse during test) */
-static MY_MSG msg_storage[100];
-static INT next_msg_idx = 0;
+/* Message pool management */
+#define MSG_POOL_SIZE	10
+static MY_MSG msg_storage[MSG_POOL_SIZE];
+static bool msg_in_use[MSG_POOL_SIZE];	/* Track which messages are allocated */
+
+/* Allocate a message from the pool */
+static MY_MSG* alloc_message(void)
+{
+	INT i;
+	for (i = 0; i < MSG_POOL_SIZE; i++) {
+		if (!msg_in_use[i]) {
+			msg_in_use[i] = true;
+			msg_storage[i].pool_index = i;  /* Store index for later deallocation */
+			return &msg_storage[i];
+		}
+	}
+	return NULL;  /* Pool exhausted */
+}
+
+/* Free a message back to the pool */
+static void free_message(MY_MSG *msg)
+{
+	if (msg != NULL && msg->pool_index >= 0 && msg->pool_index < MSG_POOL_SIZE) {
+		msg_in_use[msg->pool_index] = false;
+	}
+}
 
 static void task1_main(INT stacd, void *exinf)
 {
@@ -2005,9 +2116,14 @@ static void task1_main(INT stacd, void *exinf)
 		time = tk_get_tim();
 		count++;
 
-		/* Get next message from pool */
-		msg = &msg_storage[next_msg_idx];
-		next_msg_idx = (next_msg_idx + 1) % 100;
+		/* Allocate message from pool */
+		msg = alloc_message();
+		if (msg == NULL) {
+			uart_puts("[Task1] Message pool exhausted, waiting...\n");
+			/* Wait and try again */
+			for (volatile int i = 0; i < 1000000; i++);
+			continue;
+		}
 
 		/* Assign priority: every 3rd message gets high priority (3), others get low priority (1) */
 		priority = (count % 3 == 0) ? 3 : 1;
@@ -2083,12 +2199,16 @@ static void task2_main(INT stacd, void *exinf)
 			uart_puts("  Value: ");
 			uart_puthex(msg->value);
 			uart_puts("\n");
+
+			/* Simulate processing */
+			for (volatile int i = 0; i < 500000; i++);
+
+			/* Free message back to pool */
+			free_message(msg);
+			uart_puts("[Task2] Message freed back to pool\n");
 		} else {
 			uart_puts("[Task2] Receive failed\n");
 		}
-
-		/* Simulate processing */
-		for (volatile int i = 0; i < 500000; i++);
 	}
 }
 
@@ -2215,26 +2335,16 @@ void kernel_main(void)
 	uart_puts("System ready.\n");
 	uart_puts("\n");
 
-	/* Start timer interrupts */
-	uart_puts("Starting timer interrupts (1ms period)...\n");
-	start_hw_timer();
-	uart_puts("Timer started.\n");
-	uart_puts("\n");
-
-	/* Enable IRQ interrupts */
-	uart_puts("Enabling IRQ interrupts...\n");
-	__asm__ volatile("msr daifclr, #2");  // Clear IRQ mask (bit 1)
-	uart_puts("IRQ enabled.\n");
-	uart_puts("\n");
-
 	/* Initialize semaphores */
 	uart_puts("Initializing semaphores...\n");
 	for (INT i = 0; i < MAX_SEMAPHORES; i++) {
 		semaphore_table[i].semid = 0;
 	}
+	uart_puts("Semaphore table initialized.\n");
 
 	/* Create demo semaphore (initial count=0, max=10) */
-	demo_sem = tk_cre_sem(0, 10);
+	uart_puts("Creating demo semaphore...\n");
+	demo_sem = direct_cre_sem(0, 10);
 	uart_puts("Demo semaphore created: ID=");
 	uart_puthex((UW)demo_sem);
 	uart_puts("\n");
@@ -2246,7 +2356,7 @@ void kernel_main(void)
 	}
 
 	/* Create demo mutex */
-	demo_mtx = tk_cre_mtx();
+	demo_mtx = direct_cre_mtx();
 	uart_puts("Demo mutex created: ID=");
 	uart_puthex((UW)demo_mtx);
 	uart_puts("\n");
@@ -2258,7 +2368,7 @@ void kernel_main(void)
 	}
 
 	/* Create demo event flag (initial pattern = 0) */
-	demo_flg = tk_cre_flg(0);
+	demo_flg = direct_cre_flg(0);
 	uart_puts("Demo event flag created: ID=");
 	uart_puthex((UW)demo_flg);
 	uart_puts("\n");
@@ -2270,7 +2380,7 @@ void kernel_main(void)
 	}
 
 	/* Create demo message buffer (128 bytes, max message 64 bytes) */
-	demo_mbf = tk_cre_mbf(128, 64);
+	demo_mbf = direct_cre_mbf(128, 64);
 	uart_puts("Demo message buffer created: ID=");
 	uart_puthex((UW)demo_mbf);
 	uart_puts("\n");
@@ -2282,10 +2392,19 @@ void kernel_main(void)
 	}
 
 	/* Create demo mailbox */
-	demo_mbx_comm = tk_cre_mbx();
+	demo_mbx_comm = direct_cre_mbx();
 	uart_puts("Demo mailbox created: ID=");
 	uart_puthex((UW)demo_mbx_comm);
 	uart_puts("\n\n");
+
+	/* Initialize message pool */
+	uart_puts("Initializing message pool...\n");
+	for (INT i = 0; i < MSG_POOL_SIZE; i++) {
+		msg_in_use[i] = false;
+	}
+	uart_puts("Message pool initialized: ");
+	uart_puthex(MSG_POOL_SIZE);
+	uart_puts(" messages\n\n");
 
 	/* Initialize tasks */
 	uart_puts("Creating tasks...\n");
@@ -2302,6 +2421,18 @@ void kernel_main(void)
 	uart_puts("Task switching interval: ");
 	uart_puthex(task_switch_interval);
 	uart_puts(" ms\n");
+	uart_puts("\n");
+
+	/* Enable IRQ interrupts now that initialization is complete */
+	uart_puts("Enabling IRQ interrupts...\n");
+	__asm__ volatile("msr daifclr, #2");  // Clear IRQ mask (bit 1)
+	uart_puts("IRQ enabled.\n");
+	uart_puts("\n");
+
+	/* Start timer interrupts (after IRQs are enabled to avoid pending interrupt flood) */
+	uart_puts("Starting timer interrupts (1ms period)...\n");
+	start_hw_timer();
+	uart_puts("Timer started.\n");
 	uart_puts("\n");
 
 	/* Start multitasking by dispatching to first task */
@@ -2325,13 +2456,6 @@ void timer_handler(void)
 {
 	/* Increment tick counter */
 	timer_tick_count++;
-
-	/* Print message every 1000 ticks (1 second at 1ms per tick) */
-	if ((timer_tick_count % 1000) == 0) {
-		uart_puts("Timer tick: ");
-		uart_puthex((UW)(timer_tick_count / 1000));
-		uart_puts(" seconds\n");
-	}
 
 	/* Task switching: schedule next task every task_switch_interval ticks */
 	if ((timer_tick_count % task_switch_interval) == 0) {
