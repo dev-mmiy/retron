@@ -2077,8 +2077,16 @@ static MY_MSG* alloc_message(void)
 	for (i = 0; i < MSG_POOL_SIZE; i++) {
 		if (!msg_in_use[i]) {
 			msg_in_use[i] = true;
-			msg_storage[i].pool_index = i;  /* Store index for later deallocation */
-			return &msg_storage[i];
+
+			/* Zero-clear the entire message structure */
+			MY_MSG *msg = &msg_storage[i];
+			for (UW j = 0; j < sizeof(MY_MSG); j++) {
+				((unsigned char*)msg)[j] = 0;
+			}
+
+			/* Set pool index after clearing */
+			msg->pool_index = i;
+			return msg;
 		}
 	}
 	return NULL;  /* Pool exhausted */
@@ -2399,9 +2407,17 @@ void kernel_main(void)
 
 	/* Initialize message pool */
 	uart_puts("Initializing message pool...\n");
+
+	/* Zero-clear entire message storage for clean debugging */
+	for (UW i = 0; i < sizeof(msg_storage); i++) {
+		((unsigned char*)msg_storage)[i] = 0;
+	}
+
+	/* Initialize allocation tracking */
 	for (INT i = 0; i < MSG_POOL_SIZE; i++) {
 		msg_in_use[i] = false;
 	}
+
 	uart_puts("Message pool initialized: ");
 	uart_puthex(MSG_POOL_SIZE);
 	uart_puts(" messages\n\n");
