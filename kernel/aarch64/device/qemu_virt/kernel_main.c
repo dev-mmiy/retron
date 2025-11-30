@@ -686,6 +686,9 @@ static ER svc_wai_sem(SVC_REGS *regs)
 		(*queue_ptr)->wait_next = current;
 	}
 
+	/* Schedule next task since current task is now waiting */
+	schedule();
+
 	/* Force task switch - don't return E_OK yet */
 	/* Task will be woken up by sig_sem and will return E_OK then */
 	regs->x0 = E_OK;
@@ -783,6 +786,9 @@ static ER svc_loc_mtx(SVC_REGS *regs)
 		}
 		(*queue_ptr)->wait_next = current;
 	}
+
+	/* Schedule next task since current task is now waiting */
+	schedule();
 
 	/* TODO: Priority inheritance - boost owner's priority if needed */
 
@@ -1074,6 +1080,9 @@ static ER svc_wai_flg(SVC_REGS *regs)
 		(*queue_ptr)->wait_next = current;
 	}
 
+	/* Schedule next task since current task is now waiting */
+	schedule();
+
 	regs->x0 = E_OK;
 	return E_OK;
 }
@@ -1216,6 +1225,9 @@ static ER svc_snd_mbf(SVC_REGS *regs)
 			(*queue_ptr)->wait_next = current;
 		}
 
+		/* Schedule next task since current task is now waiting */
+		schedule();
+
 		regs->x0 = E_OK;
 		return E_OK;
 	}
@@ -1297,6 +1309,9 @@ static ER svc_rcv_mbf(SVC_REGS *regs)
 			}
 			(*queue_ptr)->wait_next = current;
 		}
+		/* Schedule next task since current task is now waiting */
+		schedule();
+
 
 		/* Don't set x0 here - it will be set when task is woken up */
 		return E_OK;
@@ -1423,10 +1438,6 @@ static ER svc_snd_mbx(SVC_REGS *regs)
 	/* Check if there's a task waiting to receive */
 	if (mbx->recv_queue != NULL) {
 		/* Direct transfer to waiting task */
-		uart_puts("DEBUG snd_mbx: direct transfer, msg=");
-		uart_puthex((UW64)msg);
-		uart_puts("\n");
-
 		recv_task = mbx->recv_queue;
 		mbx->recv_queue = recv_task->wait_next;
 
@@ -1519,21 +1530,15 @@ static ER svc_rcv_mbx(SVC_REGS *regs)
 			(*queue_ptr)->wait_next = current;
 		}
 
-		/* Don't set x0 here - it will be set when task is woken up */
+		/* Schedule next task since current task is now waiting */
+		schedule();
+
+		/* Don't set x0 here - it will be set when task is woken up by snd_mbx() */
 		return E_OK;
 	}
 
 	/* Get message from queue (highest priority first) */
 	msg = mbx->msg_queue;
-
-	/* Debug: always output msg_queue value */
-	uart_puts("DEBUG rcv_mbx: msg_queue=");
-	uart_puthex((UW64)msg);
-	uart_puts(" msg_storage range: ");
-	uart_puthex((UW64)msg_storage);
-	uart_puts(" to ");
-	uart_puthex((UW64)(msg_storage + MSG_POOL_SIZE));
-	uart_puts("\n");
 
 	/* Validate message pointer is within msg_storage array */
 	if (msg < (T_MSG*)msg_storage || msg >= (T_MSG*)(msg_storage + MSG_POOL_SIZE)) {
@@ -1556,10 +1561,6 @@ static ER svc_rcv_mbx(SVC_REGS *regs)
 		uart_puts("\n");
 		msg->next = NULL;
 	}
-
-	uart_puts("DEBUG: Setting msg_queue to msg->next=");
-	uart_puthex((UW64)msg->next);
-	uart_puts("\n");
 
 	mbx->msg_queue = msg->next;
 	msg->next = NULL;
