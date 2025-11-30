@@ -9,17 +9,22 @@
 このドキュメントでは、ReTron OSの開発進捗を記録・管理します。
 各フェーズの進捗状況、完了した作業、課題、次のステップを記録します。
 
-**最終更新日**: 2025-11-29 (Phase 2.6: ミューテックス実装完了)
+**最終更新日**: 2025-11-30 (Phase 2.9: メールボックス + メッセージプール管理完了)
 
 ---
 
-## 🎉 最新マイルストーン達成 (2025-11-29)
+## 🎉 最新マイルストーン達成 (2025-11-30)
 
-### ミューテックス（排他制御）実装完了！
+### メールボックス実装 + メッセージプール管理完了！
 
-所有権管理付きミューテックスを実装し、RTOSの基本同期プリミティブ（セマフォ、ミューテックス）が揃いました。共有リソース保護デモで、排他制御・所有権検証・待ちキュー動作を確認。
+優先度付きメールボックスとメッセージプール管理システムを実装し、T-Kernelの通信プリミティブが完成しました。
 
-**T-Kernel仕様の主要同期機能が完成**し、Phase 2のカーネル機能拡張が大きく進展しました。
+**主な成果**:
+- ✅ メールボックス: ポインタ渡し、優先度順キュー
+- ✅ メッセージプール管理: 割り当て追跡、所有権転送、メモリ安全性
+- ✅ カーネル初期化改善: SVC/直接呼び出し分離、IRQ順序最適化、UART安全性
+
+これにより、**Phase 2の同期・通信プリミティブが完成**し、本格的なRTOSアプリケーション開発が可能になりました。
 
 ```
 ========================================
@@ -3551,6 +3556,141 @@ Phase 2の通信プリミティブが充実しました！現在実装済み:
 **通信プリミティブ**:
 - ✅ メッセージバッファ (Phase 2.8): データコピー、リングバッファ、FIFO
 - ✅ メールボックス (Phase 2.9): ポインタ渡し、優先度キュー
+
+### メッセージプール破損の修正 (2025-11-30)
+
+#### 問題の発見
+
+メールボックス実装のテスト中、メッセージ#4送信後にシステムがフリーズする問題を発見:
+```
+[Task1] Sending message #0x00000001...
+[Task1] Message sent successfully
+[Task1] Sending message #0x00000002...
+[Task1] Message sent successfully
+[Task1] Sending message #0x00000003...
+[Task1] Message sent successfully
+[Task1] Sending message #0x00000004...
+[FREEZE - no output]
+```
+
+**根本原因**: メッセージプールの再利用による破損
+- 初期実装: 3個の静的メッセージをラウンドロビンで循環使用
+- Task1がmessage #4送信時に`msg_storage[0]`を再利用
+- message #1がまだメールボックスキューに残っている状態で再利用
+- `msg_storage[0].next`ポインタを上書き → リンクリスト破損
+- キュー走査時に無限ループまたはセグメンテーションフォルト
+
+#### 実装した本質的解決策
+
+**メッセージプール管理システム**を実装し、所有権を明確化:
+
+1. **プール管理構造**:
+   ```c
+   #define MSG_POOL_SIZE 10
+   static MY_MSG msg_storage[MSG_POOL_SIZE];
+   static bool msg_in_use[MSG_POOL_SIZE];  // 割り当て追跡
+   ```
+
+2. **メッセージ構造拡張**:
+   ```c
+   typedef struct {
+       T_MSG header;
+       UW sequence;
+       UW timestamp;
+       UW value;
+       INT pool_index;  // NEW: プール内位置を追跡
+   } MY_MSG;
+   ```
+
+3. **割り当て・解放関数**:
+   ```c
+   static MY_MSG* alloc_message(void) {
+       for (INT i = 0; i < MSG_POOL_SIZE; i++) {
+           if (!msg_in_use[i]) {
+               msg_in_use[i] = true;
+               msg_storage[i].pool_index = i;
+               return &msg_storage[i];
+           }
+       }
+       return NULL;  // プール枯渇
+   }
+
+   static void free_message(MY_MSG *msg) {
+       if (msg && msg->pool_index >= 0 && msg->pool_index < MSG_POOL_SIZE) {
+           msg_in_use[msg->pool_index] = false;
+       }
+   }
+   ```
+
+4. **タスクコード更新**:
+   - Task1: `alloc_message()`でメッセージ取得、枯渇時は待機
+   - Task2: `free_message()`で処理後にプールへ返却
+
+5. **所有権転送フロー**:
+   ```
+   送信側 → alloc → 送信 → メールボックス → 受信 → 処理 → free → プール
+   ```
+
+#### 追加の初期化修正
+
+**カーネル初期化順序の問題**も発見・修正:
+
+1. **SVC命令の問題**:
+   - kernel_main()がEL1で実行中に`tk_cre_sem()`などを呼び出し
+   - これらはSVC命令を使用（EL0→EL1遷移用）
+   - EL1からSVC実行 → 同期例外発生
+
+2. **解決策**: カーネル直接呼び出し関数を実装:
+   ```c
+   static ID direct_cre_sem(INT isemcnt, INT maxsem);
+   static ID direct_cre_mtx(void);
+   static ID direct_cre_flg(UW iflgptn);
+   static ID direct_cre_mbf(UW bufsz, UW maxmsz);
+   static ID direct_cre_mbx(void);
+   ```
+
+3. **IRQ有効化順序の問題**:
+   - 旧: タイマー起動 → (長時間の初期化) → IRQ有効化
+   - 結果: 数百個の保留割り込みが一度に発生 → UART競合でハング
+
+4. **解決策**: タイマー起動を遅延:
+   ```c
+   // 初期化完了
+   → IRQ有効化
+   → タイマー起動  // NEW: IRQ有効後に起動
+   → マルチタスク開始
+   ```
+
+5. **UART再入問題**:
+   - timer_handler()の"Timer tick:"出力を削除
+   - kernel_main()のUART出力中に割り込み → デッドロック防止
+
+#### 技術的成果
+
+**メッセージプール管理**:
+- ✅ プールサイズ削減: 100 → 10 メッセージ (効率的な追跡により)
+- ✅ メモリ安全性: 使用中メッセージの再利用を防止
+- ✅ デバッグ容易性: pool_indexによる追跡
+- ✅ 拡張性: プール枯渇時の処理をカスタマイズ可能
+
+**カーネル初期化改善**:
+- ✅ EL1/EL0分離: カーネル直接呼び出しとSVC wrapperの明確化
+- ✅ 割り込み制御: 保留割り込みフラッド防止
+- ✅ UART安全性: 再入禁止による安定化
+- ✅ 初期化順序最適化: タイマー/IRQ/マルチタスクの正しい順序
+
+#### 次のステップ
+
+Phase 2の通信プリミティブが充実しました！現在実装済み:
+
+**同期プリミティブ**:
+- ✅ セマフォ (Phase 2.5): カウンティング同期
+- ✅ ミューテックス (Phase 2.6): 排他制御、所有権管理
+- ✅ イベントフラグ (Phase 2.7): ビットパターン同期、AND/OR待ち
+
+**通信プリミティブ**:
+- ✅ メッセージバッファ (Phase 2.8): データコピー、リングバッファ、FIFO
+- ✅ メールボックス (Phase 2.9): ポインタ渡し、優先度キュー、プール管理
 
 次の候補:
 
