@@ -3665,6 +3665,54 @@ Phase 2の通信プリミティブが充実しました！現在実装済み:
    - timer_handler()の"Timer tick:"出力を削除
    - kernel_main()のUART出力中に割り込み → デッドロック防止
 
+#### メモリ初期化による破損メッセージ問題の修正
+
+テスト時に発見された**異常なメッセージ値**の問題:
+```
+Priority: 0x00400000  (4194304 = 異常値)
+Sequence: 0x00300000  (3145728 = 異常値)
+Timestamp: 0x00110000 (異常値)
+Value: 0x00100000     (1048576 = 異常値)
+```
+
+**根本原因**: 未初期化メモリの読み取り
+- プールから再割り当てされたメッセージに古いデータが残存
+- `alloc_message()`が`pool_index`のみ設定し、他のフィールドを初期化していない
+- 結果: 以前使用されたメッセージの残骸データを受信タスクが処理
+
+**実装した解決策**:
+
+1. **起動時のゼロクリア** (kernel_main):
+   ```c
+   /* Zero-clear entire message storage for clean debugging */
+   for (UW i = 0; i < sizeof(msg_storage); i++) {
+       ((unsigned char*)msg_storage)[i] = 0;
+   }
+   ```
+
+2. **割り当て時のゼロクリア** (alloc_message):
+   ```c
+   /* Zero-clear the entire message structure */
+   MY_MSG *msg = &msg_storage[i];
+   for (UW j = 0; j < sizeof(MY_MSG); j++) {
+       ((unsigned char*)msg)[j] = 0;
+   }
+
+   /* Set pool index after clearing */
+   msg->pool_index = i;
+   ```
+
+3. **メモリ管理パターン**:
+   - **起動時**: msg_storage配列全体をゼロクリア（デバッグしやすい）
+   - **割り当て時**: メッセージ全体をゼロクリア後にpool_indexを設定
+   - **解放時**: `msg_in_use[i] = false`のみ（次回alloc時に再度ゼロクリア）
+
+**効果**:
+- ✅ 異常値（0x00X0000パターン）が完全に消失
+- ✅ 全てのメッセージフィールドが正常な値で初期化される
+- ✅ デバッグ時にゼロ初期化を前提にできる
+- ✅ メモリリークやデータ汚染の検出が容易
+
 #### 技術的成果
 
 **メッセージプール管理**:
