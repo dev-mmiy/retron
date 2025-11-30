@@ -2397,6 +2397,8 @@ void kernel_main(void)
 	uart_puts("Initializing mailboxes...\n");
 	for (INT i = 0; i < MAX_MAILBOXES; i++) {
 		mailbox_table[i].mbxid = 0;
+		mailbox_table[i].msg_queue = NULL;
+		mailbox_table[i].recv_queue = NULL;
 	}
 
 	/* Create demo mailbox */
