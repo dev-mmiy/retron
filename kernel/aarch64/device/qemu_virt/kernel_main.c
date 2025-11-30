@@ -203,6 +203,24 @@ typedef struct t_msg {
 } T_MSG;
 
 /*
+ * Custom message structure extending T_MSG
+ */
+typedef struct {
+	T_MSG	header;		/* Message header (must be first) */
+	UW	sequence;	/* Message sequence number */
+	UW	timestamp;	/* Timestamp when message was created */
+	UW	value;		/* Data value */
+	INT	pool_index;	/* Index in message pool (for deallocation) */
+} MY_MSG;
+
+/*
+ * Message pool management
+ */
+#define MSG_POOL_SIZE	10
+static MY_MSG msg_storage[MSG_POOL_SIZE];
+static bool msg_in_use[MSG_POOL_SIZE];	/* Track which messages are allocated */
+
+/*
  * Mailbox Control Block
  */
 typedef struct {
@@ -2078,20 +2096,6 @@ static void init_mmu(void)
 /*
  * Demo task functions - Mailbox demonstration with priority messages
  */
-
-/* Custom message structure extending T_MSG */
-typedef struct {
-	T_MSG	header;		/* Message header (must be first) */
-	UW	sequence;	/* Message sequence number */
-	UW	timestamp;	/* Timestamp when message was created */
-	UW	value;		/* Data value */
-	INT	pool_index;	/* Index in message pool (for deallocation) */
-} MY_MSG;
-
-/* Message pool management */
-#define MSG_POOL_SIZE	10
-static MY_MSG msg_storage[MSG_POOL_SIZE];
-static bool msg_in_use[MSG_POOL_SIZE];	/* Track which messages are allocated */
 
 /* Allocate a message from the pool */
 static MY_MSG* alloc_message(void)
