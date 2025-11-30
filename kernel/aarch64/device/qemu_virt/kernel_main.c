@@ -1522,6 +1522,15 @@ static ER svc_rcv_mbx(SVC_REGS *regs)
 	/* Get message from queue (highest priority first) */
 	msg = mbx->msg_queue;
 
+	/* Debug: always output msg_queue value */
+	uart_puts("DEBUG rcv_mbx: msg_queue=");
+	uart_puthex((UW64)msg);
+	uart_puts(" msg_storage range: ");
+	uart_puthex((UW64)msg_storage);
+	uart_puts(" to ");
+	uart_puthex((UW64)(msg_storage + MSG_POOL_SIZE));
+	uart_puts("\n");
+
 	/* Validate message pointer is within msg_storage array */
 	if (msg < (T_MSG*)msg_storage || msg >= (T_MSG*)(msg_storage + MSG_POOL_SIZE)) {
 		/* Invalid message pointer - mailbox is corrupted */
