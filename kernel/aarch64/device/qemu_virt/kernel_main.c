@@ -1503,6 +1503,29 @@ static ER svc_rcv_mbx(SVC_REGS *regs)
 
 	/* Get message from queue (highest priority first) */
 	msg = mbx->msg_queue;
+
+	/* Validate message pointer is within msg_storage array */
+	if (msg < (T_MSG*)msg_storage || msg >= (T_MSG*)(msg_storage + MSG_POOL_SIZE)) {
+		/* Invalid message pointer - mailbox is corrupted */
+		uart_puts("ERROR: Invalid message pointer in mailbox queue: ");
+		uart_puthex((UW64)msg);
+		uart_puts("\n");
+		/* Reset mailbox to prevent further corruption */
+		mbx->msg_queue = NULL;
+		regs->x0 = -1;
+		return -1;
+	}
+
+	/* Validate next pointer before using it */
+	if (msg->next != NULL &&
+	    (msg->next < (T_MSG*)msg_storage || msg->next >= (T_MSG*)(msg_storage + MSG_POOL_SIZE))) {
+		/* Invalid next pointer - set to NULL to prevent propagation */
+		uart_puts("WARNING: Invalid next pointer in message, setting to NULL: ");
+		uart_puthex((UW64)msg->next);
+		uart_puts("\n");
+		msg->next = NULL;
+	}
+
 	mbx->msg_queue = msg->next;
 	msg->next = NULL;
 
