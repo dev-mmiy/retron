@@ -2224,6 +2224,11 @@ static void task2_main(INT stacd, void *exinf)
 			uart_puts("[Task2] Received message at ");
 			uart_puthex((UW)time);
 			uart_puts("ms:\n");
+			uart_puts("  Address: ");
+			uart_puthex((UW64)msg);
+			uart_puts(" Pool index: ");
+			uart_puthex(msg->pool_index);
+			uart_puts("\n");
 			uart_puts("  Priority: ");
 			uart_puthex(msg->header.msgpri);
 			uart_puts("\n");
