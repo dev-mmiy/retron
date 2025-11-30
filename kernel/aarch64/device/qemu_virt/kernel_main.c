@@ -1423,6 +1423,10 @@ static ER svc_snd_mbx(SVC_REGS *regs)
 	/* Check if there's a task waiting to receive */
 	if (mbx->recv_queue != NULL) {
 		/* Direct transfer to waiting task */
+		uart_puts("DEBUG snd_mbx: direct transfer, msg=");
+		uart_puthex((UW64)msg);
+		uart_puts("\n");
+
 		recv_task = mbx->recv_queue;
 		mbx->recv_queue = recv_task->wait_next;
 
@@ -1552,6 +1556,10 @@ static ER svc_rcv_mbx(SVC_REGS *regs)
 		uart_puts("\n");
 		msg->next = NULL;
 	}
+
+	uart_puts("DEBUG: Setting msg_queue to msg->next=");
+	uart_puthex((UW64)msg->next);
+	uart_puts("\n");
 
 	mbx->msg_queue = msg->next;
 	msg->next = NULL;
