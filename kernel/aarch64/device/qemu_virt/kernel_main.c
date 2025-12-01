@@ -524,14 +524,33 @@ static ER svc_get_tid(SVC_REGS *regs)
  */
 static ER svc_dly_tsk(SVC_REGS *regs)
 {
-	UW64 dlytim = regs->x0;
-	UW64 start_tick = timer_tick_count;
+	TMO dlytim = (TMO)regs->x0;
+	TCB *current;
 
-	/* Simple busy wait (don't use WFI in SVC handler - interrupts may not work correctly) */
-	while ((timer_tick_count - start_tick) < dlytim) {
-		/* Just spin - timer interrupts will update timer_tick_count */
+	/* Handle zero delay - return immediately */
+	if (dlytim == 0) {
+		regs->x0 = E_OK;
+		return E_OK;
 	}
 
+	/* Get current task */
+	current = (TCB *)ctxtsk;
+	if (current == NULL) {
+		regs->x0 = E_SYS;
+		return E_SYS;
+	}
+
+	/* Put task to sleep with timeout */
+	current->state = TS_WAIT;
+	current->wait_next = NULL;
+	current->wait_obj = NULL;  /* Not waiting on any object */
+	current->wait_regs = regs;  /* Save register context */
+	current->wait_timeout = timer_tick_count + dlytim;  /* Set absolute wakeup time */
+
+	/* Schedule next task since current task is now waiting */
+	schedule();
+
+	/* When woken up by timeout, return E_OK */
 	regs->x0 = E_OK;
 	return E_OK;
 }
@@ -2791,11 +2810,11 @@ static void check_timeouts(void)
 
 		/* Check if timeout has occurred */
 		if ((SYSTIM)timer_tick_count >= task->wait_timeout) {
-			/* Timeout occurred - need to remove from wait queue */
+			/* Timeout occurred */
 
-			/* Currently only handling semaphore waits */
 			if (task->wait_obj != NULL) {
-				/* Assume wait_obj is a semaphore */
+				/* Waiting on an object (semaphore, mutex, etc.) - remove from wait queue */
+				/* Currently only handling semaphore waits */
 				sem = (SEMCB *)task->wait_obj;
 
 				/* Remove from semaphore wait queue */
@@ -2813,11 +2832,17 @@ static void check_timeouts(void)
 						queue_ptr = &((*queue_ptr)->wait_next);
 					}
 				}
-			}
 
-			/* Set return value to E_TMOUT */
-			if (task->wait_regs != NULL) {
-				((SVC_REGS *)task->wait_regs)->x0 = E_TMOUT;
+				/* Set return value to E_TMOUT (timeout error) */
+				if (task->wait_regs != NULL) {
+					((SVC_REGS *)task->wait_regs)->x0 = E_TMOUT;
+				}
+			} else {
+				/* Task delay (tk_dly_tsk) - timeout is normal completion */
+				/* Set return value to E_OK (successful delay) */
+				if (task->wait_regs != NULL) {
+					((SVC_REGS *)task->wait_regs)->x0 = E_OK;
+				}
 			}
 
 			/* Make task ready */
