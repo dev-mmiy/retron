@@ -2288,7 +2288,10 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puthex((UW)(time_end - time_start));
 		uart_puts("ms\n");
 	} else if (err == E_OK) {
-		uart_puts("OK (unexpected - should have timed out!)\n");
+		uart_puts("OK (got semaphore early - releasing it) after ");
+		uart_puthex((UW)(time_end - time_start));
+		uart_puts("ms\n");
+		tk_sig_sem(demo_sem);  /* Release so task2 can acquire it */
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
@@ -2314,7 +2317,10 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puthex((UW)(time_end - time_start));
 		uart_puts("ms\n");
 	} else if (err == E_OK) {
-		uart_puts("OK (unexpected - should have timed out!)\n");
+		uart_puts("OK (unexpected - releasing it) after ");
+		uart_puthex((UW)(time_end - time_start));
+		uart_puts("ms\n");
+		tk_sig_sem(demo_sem);  /* Release if we got it */
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
