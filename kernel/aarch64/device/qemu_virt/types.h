@@ -53,12 +53,19 @@ typedef void			*VP;
 typedef W			ER;		/* Error code */
 typedef INT			ID;		/* Object ID */
 typedef UINT			ATR;		/* Object attribute */
+typedef D			SYSTIM;		/* System time (64-bit, milliseconds) */
+typedef W			TMO;		/* Timeout value (milliseconds) */
+
+/* Timeout special values */
+#define TMO_POL			0		/* Polling (no wait) */
+#define TMO_FEVR		(-1)		/* Wait forever */
 
 /* Error codes */
 #define E_OK			0		/* Normal completion */
 #define E_SYS			(-5)		/* System error */
 #define E_NOSPT			(-9)		/* Unsupported function */
 #define E_RSFN			(-10)		/* Reserved function code */
+#define E_TMOUT			(-11)		/* Timeout */
 #define E_PAR			(-17)		/* Parameter error */
 #define E_OBJ			(-41)		/* Invalid object state */
 #define E_NOEXS			(-42)		/* Object does not exist */

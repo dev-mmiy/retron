@@ -88,6 +88,9 @@ typedef struct tcb {
 	UW		wait_flgptn;	/* Flag pattern for event flag wait */
 	UW		wait_mode;	/* Wait mode for event flag wait */
 	void		*wait_regs;	/* Saved register context (SVC_REGS*) for blocked tasks */
+
+	/* Timeout information */
+	SYSTIM		wait_timeout;	/* Timeout absolute time (0 = no timeout) */
 } TCB;
 
 /*
