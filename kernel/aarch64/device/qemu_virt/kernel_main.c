@@ -2274,7 +2274,7 @@ static void task1_main(INT stacd, void *exinf)
 
 	/* Wait for task2 to start and acquire semaphore */
 	uart_puts("[Task1] Waiting for Task2 to acquire semaphore...\n\n");
-	for (volatile int i = 0; i < 20000000; i++);  /* Long delay to ensure Task2 runs first */
+	tk_dly_tsk(200);  /* Delay 200ms to let Task2 run and acquire semaphore */
 
 	/* ===== Test 1: Short timeout - should timeout ===== */
 	test_num++;
@@ -2337,7 +2337,7 @@ static void task1_main(INT stacd, void *exinf)
 
 	/* ===== Test 3: Long timeout - should succeed after Task2 releases ===== */
 	uart_puts("[Task1] Waiting for Task2 to release semaphore...\n\n");
-	for (volatile int i = 0; i < 5000000; i++);
+	tk_dly_tsk(100);  /* Delay 100ms to let Task2 release semaphore */
 
 	test_num++;
 	uart_puts("[Test ");
