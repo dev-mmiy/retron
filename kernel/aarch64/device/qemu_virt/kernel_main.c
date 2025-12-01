@@ -480,6 +480,7 @@ static void schedule(void)
 #define SVC_RCV_MBX		20	/* Receive message from mailbox */
 #define SVC_WAI_SEM_U		21	/* Wait semaphore with timeout */
 #define SVC_LOC_MTX_U		22	/* Lock mutex with timeout */
+#define SVC_RCV_MBX_U		23	/* Receive mailbox with timeout */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -1782,6 +1783,142 @@ static ER svc_rcv_mbx(SVC_REGS *regs)
 }
 
 /*
+ * System call: Receive message from mailbox with timeout
+ * Input: x0 = mailbox ID, x1 = timeout (TMO), x2 = pointer to message pointer
+ * Output: x0 = E_OK, E_TMOUT, or error
+ *         *ppk_msg = received message pointer (on success)
+ */
+static ER svc_rcv_mbx_u(SVC_REGS *regs)
+{
+	ID mbxid = (ID)regs->x0;
+	TMO tmo = (TMO)regs->x1;
+	T_MSG **ppk_msg = (T_MSG **)regs->x2;
+	MBXCB *mbx = NULL;
+	TCB *current;
+	TCB **queue_ptr;
+	T_MSG *msg;
+	INT i;
+
+	/* Find mailbox */
+	for (i = 0; i < MAX_MAILBOXES; i++) {
+		if (mailbox_table[i].mbxid == mbxid) {
+			mbx = &mailbox_table[i];
+			break;
+		}
+	}
+
+	if (mbx == NULL) {
+		regs->x0 = E_NOEXS;
+		return E_NOEXS;
+	}
+
+	/* Handle polling case (TMO_POL = 0) */
+	if (tmo == TMO_POL) {
+		if (mbx->msg_queue == NULL) {
+			/* Mailbox empty */
+			regs->x0 = E_TMOUT;
+			return E_TMOUT;
+		} else {
+			/* Get message from queue */
+			msg = mbx->msg_queue;
+
+			/* Validate message pointer */
+			if (msg < (T_MSG*)msg_storage || msg >= (T_MSG*)(msg_storage + MSG_POOL_SIZE)) {
+				mbx->msg_queue = NULL;
+				regs->x0 = E_SYS;
+				return E_SYS;
+			}
+
+			/* Validate next pointer */
+			if (msg->next != NULL &&
+			    (msg->next < (T_MSG*)msg_storage || msg->next >= (T_MSG*)(msg_storage + MSG_POOL_SIZE))) {
+				msg->next = NULL;
+			}
+
+			mbx->msg_queue = msg->next;
+			msg->next = NULL;
+
+			/* Return message pointer via output parameter */
+			*ppk_msg = msg;
+			regs->x0 = E_OK;
+			return E_OK;
+		}
+	}
+
+	/* Check if mailbox has messages */
+	if (mbx->msg_queue != NULL) {
+		/* Get message from queue (highest priority first) */
+		msg = mbx->msg_queue;
+
+		/* Validate message pointer */
+		if (msg < (T_MSG*)msg_storage || msg >= (T_MSG*)(msg_storage + MSG_POOL_SIZE)) {
+			uart_puts("ERROR: Invalid message pointer in mailbox queue: ");
+			uart_puthex((UW64)msg);
+			uart_puts("\n");
+			mbx->msg_queue = NULL;
+			regs->x0 = E_SYS;
+			return E_SYS;
+		}
+
+		/* Validate next pointer */
+		if (msg->next != NULL &&
+		    (msg->next < (T_MSG*)msg_storage || msg->next >= (T_MSG*)(msg_storage + MSG_POOL_SIZE))) {
+			uart_puts("WARNING: Invalid next pointer in message, setting to NULL: ");
+			uart_puthex((UW64)msg->next);
+			uart_puts("\n");
+			msg->next = NULL;
+		}
+
+		mbx->msg_queue = msg->next;
+		msg->next = NULL;
+
+		/* Return message pointer via output parameter */
+		*ppk_msg = msg;
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* Mailbox empty, add to receive queue with timeout */
+	current = (TCB *)ctxtsk;
+	if (current == NULL) {
+		regs->x0 = E_SYS;
+		return E_SYS;
+	}
+
+	current->state = TS_WAIT;
+	current->wait_next = NULL;
+	current->wait_obj = (void *)mbx;
+	current->wait_regs = (void *)regs; /* Store register context for return value */
+
+	/* Set timeout: calculate absolute timeout time */
+	if (tmo == TMO_FEVR) {
+		current->wait_timeout = 0;  /* 0 means no timeout */
+	} else {
+		current->wait_timeout = timer_tick_count + tmo;
+	}
+
+	/* Add to end of recv queue */
+	if (mbx->recv_queue == NULL) {
+		mbx->recv_queue = current;
+	} else {
+		queue_ptr = &mbx->recv_queue;
+		while (*queue_ptr != NULL && (*queue_ptr)->wait_next != NULL) {
+			queue_ptr = &((*queue_ptr)->wait_next);
+		}
+		(*queue_ptr)->wait_next = current;
+	}
+
+	/* Schedule next task since current task is now waiting */
+	schedule();
+
+	/* Task will be woken up by snd_mbx (E_OK) or timeout (E_TMOUT) */
+	/* Note: The return value is set by either snd_mbx or check_timeouts */
+	/* For now, return E_OK - will be overwritten on timeout */
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
  * System call handler (called from assembly)
  * x0 = SVC number
  * x1 = pointer to saved register context
@@ -1854,6 +1991,9 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 		break;
 	case SVC_LOC_MTX_U:
 		svc_loc_mtx_u(regs);
+		break;
+	case SVC_RCV_MBX_U:
+		svc_rcv_mbx_u(regs);
 		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
@@ -2235,6 +2375,21 @@ static inline T_MSG* tk_rcv_mbx(ID mbxid)
 	return (T_MSG*)ret;
 }
 
+/* Receive message from mailbox with timeout */
+static inline ER tk_rcv_mbx_u(ID mbxid, TMO tmo, T_MSG **ppk_msg)
+{
+	register UW64 r0 __asm__("x0") = mbxid;
+	register UW64 r1 __asm__("x1") = tmo;
+	register UW64 r2 __asm__("x2") = (UW64)ppk_msg;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_RCV_MBX_U), "r"(r1), "r"(r2)
+		: "memory"
+	);
+	return (ER)r0;
+}
+
 /*
  * MMU Setup Functions
  */
@@ -2406,21 +2561,23 @@ static void task1_main(INT stacd, void *exinf)
 	tid = tk_get_tid();
 	uart_puts("\n");
 	uart_puts("========================================\n");
-	uart_puts("  Mutex Timeout Test Suite\n");
+	uart_puts("  Mailbox Timeout Test Suite\n");
 	uart_puts("========================================\n\n");
 
-	/* Wait for task2 to start and lock mutex */
-	uart_puts("[Task1] Waiting for Task2 to lock mutex...\n\n");
-	tk_dly_tsk(50);  /* Delay 50ms to let Task2 run and lock mutex */
+	/* Wait for task2 to start (mailbox initially empty) */
+	uart_puts("[Task1] Starting tests (mailbox initially empty)...\n\n");
+	tk_dly_tsk(50);  /* Delay 50ms to let Task2 start */
+
+	T_MSG *msg = NULL;
 
 	/* ===== Test 1: Short timeout - should timeout ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Short timeout (50ms) while mutex locked\n");
+	uart_puts("] Short timeout (50ms) while mailbox empty\n");
 	uart_puts("  Expected: E_TMOUT after ~50ms\n");
 	time_start = tk_get_tim();
-	err = tk_loc_mtx_u(demo_mtx, 50);
+	err = tk_rcv_mbx_u(demo_mbx_comm, 50, &msg);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2433,7 +2590,7 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		uart_puts("ms ✗ FAIL (should timeout)\n");
-		tk_unl_mtx(demo_mtx);  /* Unlock */
+		if (msg) free_message((MY_MSG*)msg);
 		uart_puts("\n");
 	} else {
 		uart_puts("ERROR ");
@@ -2444,14 +2601,14 @@ static void task1_main(INT stacd, void *exinf)
 	/* Short delay between tests */
 	for (volatile int i = 0; i < 1000000; i++);
 
-	/* ===== Test 2: Poll while locked (TMO_POL) ===== */
+	/* ===== Test 2: Poll while empty (TMO_POL) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) while mutex locked\n");
+	uart_puts("] Poll (TMO_POL) while mailbox empty\n");
 	uart_puts("  Expected: E_TMOUT immediately\n");
 	time_start = tk_get_tim();
-	err = tk_loc_mtx_u(demo_mtx, TMO_POL);
+	err = tk_rcv_mbx_u(demo_mbx_comm, TMO_POL, &msg);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2464,7 +2621,7 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		uart_puts("ms ✗ FAIL (should timeout)\n");
-		tk_unl_mtx(demo_mtx);
+		if (msg) free_message((MY_MSG*)msg);
 		uart_puts("\n");
 	} else {
 		uart_puts("ERROR ");
@@ -2472,17 +2629,17 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 3: Long timeout - should succeed after Task2 unlocks ===== */
-	uart_puts("[Task1] Waiting for Task2 to unlock mutex...\n\n");
-	tk_dly_tsk(100);  /* Delay 100ms to let Task2 unlock mutex */
+	/* ===== Test 3: Long timeout - should succeed after Task2 sends message ===== */
+	uart_puts("[Task1] Waiting for Task2 to send message...\n\n");
+	tk_dly_tsk(100);  /* Delay 100ms to let Task2 send message */
 
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Long timeout (500ms) - mutex should be available\n");
+	uart_puts("] Long timeout (500ms) - message should be available\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_loc_mtx_u(demo_mtx, 500);
+	err = tk_rcv_mbx_u(demo_mbx_comm, 500, &msg);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2491,11 +2648,16 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		if (elapsed < 10) {
-			uart_puts("ms ✓ PASS\n\n");
+			uart_puts("ms ✓ PASS\n");
 		} else {
-			uart_puts("ms ⚠ WARNING (too slow)\n\n");
+			uart_puts("ms ⚠ WARNING (too slow)\n");
 		}
-		/* Keep mutex locked for next test */
+		if (msg) {
+			uart_puts("    Message received: \"");
+			uart_puts(((MY_MSG*)msg)->text);
+			uart_puts("\"\n\n");
+			free_message((MY_MSG*)msg);
+		}
 	} else if (err == E_TMOUT) {
 		uart_puts("E_TMOUT after ");
 		uart_puthex((UW)elapsed);
@@ -2506,26 +2668,27 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 4: Poll while already owning mutex (recursive lock - should fail) ===== */
+	/* ===== Test 4: Poll while empty again (TMO_POL) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) recursive lock attempt\n");
-	uart_puts("  Expected: E_SYS (recursive lock not allowed)\n");
+	uart_puts("] Poll (TMO_POL) while mailbox empty again\n");
+	uart_puts("  Expected: E_TMOUT immediately\n");
 	time_start = tk_get_tim();
-	err = tk_loc_mtx_u(demo_mtx, TMO_POL);
+	err = tk_rcv_mbx_u(demo_mbx_comm, TMO_POL, &msg);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
 	uart_puts("  Result: ");
-	if (err == E_SYS) {
-		uart_puts("E_SYS after ");
+	if (err == E_TMOUT) {
+		uart_puts("E_TMOUT after ");
 		uart_puthex((UW)elapsed);
 		uart_puts("ms ✓ PASS\n\n");
 	} else if (err == E_OK) {
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (recursive lock should be rejected)\n");
+		uart_puts("ms ✗ FAIL (mailbox should be empty)\n");
+		if (msg) free_message((MY_MSG*)msg);
 		uart_puts("\n");
 	} else {
 		uart_puts("ERROR ");
@@ -2533,17 +2696,18 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* Unlock mutex for next test */
-	tk_unl_mtx(demo_mtx);
+	/* Signal Task2 to send another message */
+	uart_puts("[Task1] Signaling Task2 to send another message...\n\n");
+	tk_dly_tsk(50);
 
-	/* ===== Test 5: Poll while available (TMO_POL) ===== */
+	/* ===== Test 5: Poll while message available (TMO_POL) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) while mutex available\n");
+	uart_puts("] Poll (TMO_POL) while message available\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_loc_mtx_u(demo_mtx, TMO_POL);
+	err = tk_rcv_mbx_u(demo_mbx_comm, TMO_POL, &msg);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2552,11 +2716,16 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		if (elapsed < 5) {
-			uart_puts("ms ✓ PASS\n\n");
+			uart_puts("ms ✓ PASS\n");
 		} else {
-			uart_puts("ms ⚠ WARNING (too slow)\n\n");
+			uart_puts("ms ⚠ WARNING (too slow)\n");
 		}
-		tk_unl_mtx(demo_mtx);  /* Unlock for next test */
+		if (msg) {
+			uart_puts("    Message received: \"");
+			uart_puts(((MY_MSG*)msg)->text);
+			uart_puts("\"\n\n");
+			free_message((MY_MSG*)msg);
+		}
 	} else if (err == E_TMOUT) {
 		uart_puts("E_TMOUT after ");
 		uart_puthex((UW)elapsed);
@@ -2567,14 +2736,17 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 6: Forever wait (TMO_FEVR) when available ===== */
+	/* ===== Test 6: Forever wait (TMO_FEVR) when message available ===== */
+	uart_puts("[Task1] Waiting for one more message...\n");
+	tk_dly_tsk(50);
+
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Forever wait (TMO_FEVR) while mutex available\n");
+	uart_puts("] Forever wait (TMO_FEVR) while message available\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_loc_mtx_u(demo_mtx, TMO_FEVR);
+	err = tk_rcv_mbx_u(demo_mbx_comm, TMO_FEVR, &msg);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2583,11 +2755,16 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		if (elapsed < 5) {
-			uart_puts("ms ✓ PASS\n\n");
+			uart_puts("ms ✓ PASS\n");
 		} else {
-			uart_puts("ms ⚠ WARNING (too slow)\n\n");
+			uart_puts("ms ⚠ WARNING (too slow)\n");
 		}
-		tk_unl_mtx(demo_mtx);  /* Unlock */
+		if (msg) {
+			uart_puts("    Message received: \"");
+			uart_puts(((MY_MSG*)msg)->text);
+			uart_puts("\"\n\n");
+			free_message((MY_MSG*)msg);
+		}
 	} else if (err == E_TMOUT) {
 		uart_puts("E_TMOUT after ");
 		uart_puthex((UW)elapsed);
@@ -2619,37 +2796,76 @@ static void task2_main(INT stacd, void *exinf)
 
 	/* Get task ID using system call */
 	tid = tk_get_tid();
+	MY_MSG *msg1, *msg2, *msg3;
 
-	uart_puts("[Task2] Mutex locker started\n");
+	uart_puts("[Task2] Message sender started\n");
 
-	/* Lock the mutex immediately to block task1 */
+	/* Keep mailbox empty initially for Test 1 and Test 2 */
+	uart_puts("[Task2] Waiting (mailbox empty for Task1's Test 1 and Test 2)...\n\n");
+	tk_dly_tsk(300);  /* Wait for 300ms - Task1 will test timeouts */
+
+	/* Send first message for Test 3 */
 	time = tk_get_tim();
-	uart_puts("[Task2] Locking mutex at ");
+	uart_puts("[Task2] Sending first message at ");
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
 
-	err = tk_loc_mtx(demo_mtx);
-	if (err == E_OK) {
-		uart_puts("[Task2] Mutex locked successfully\n");
-	} else {
-		uart_puts("[Task2] Failed to lock mutex - ERROR ");
-		uart_puthex(err);
-		uart_puts("\n");
+	msg1 = allocate_message();
+	if (msg1) {
+		msg1->header.msgpri = 1;
+		uart_puts("[Task2] Allocated message 1\n");
+		for (int i = 0; i < 19 && "Test message 1"[i]; i++) {
+			msg1->text[i] = "Test message 1"[i];
+		}
+		msg1->text[14] = '\0';
+		err = tk_snd_mbx(demo_mbx_comm, (T_MSG*)msg1);
+		if (err == E_OK) {
+			uart_puts("[Task2] First message sent successfully\n\n");
+		}
 	}
 
-	/* Hold it long enough for Task1's Test 1 and Test 2 to timeout */
-	uart_puts("[Task2] Holding mutex to block Task1...\n");
-	uart_puts("[Task2] (This allows Test 1 and Test 2 to verify timeout)\n\n");
-	tk_dly_tsk(300);  /* Hold for 300ms - Task1 will wake at 50ms and test timeouts */
-
-	/* Unlock the mutex */
+	/* Wait for Task1 Test 4, then send second message for Test 5 */
+	tk_dly_tsk(100);
 	time = tk_get_tim();
-	uart_puts("[Task2] Unlocking mutex at ");
+	uart_puts("[Task2] Sending second message at ");
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
-	tk_unl_mtx(demo_mtx);
 
-	uart_puts("[Task2] Mutex unlocked - Task1 can now lock it\n");
+	msg2 = allocate_message();
+	if (msg2) {
+		msg2->header.msgpri = 1;
+		uart_puts("[Task2] Allocated message 2\n");
+		for (int i = 0; i < 19 && "Test message 2"[i]; i++) {
+			msg2->text[i] = "Test message 2"[i];
+		}
+		msg2->text[14] = '\0';
+		err = tk_snd_mbx(demo_mbx_comm, (T_MSG*)msg2);
+		if (err == E_OK) {
+			uart_puts("[Task2] Second message sent successfully\n\n");
+		}
+	}
+
+	/* Send third message for Test 6 */
+	tk_dly_tsk(50);
+	time = tk_get_tim();
+	uart_puts("[Task2] Sending third message at ");
+	uart_puthex((UW)time);
+	uart_puts("ms\n");
+
+	msg3 = allocate_message();
+	if (msg3) {
+		msg3->header.msgpri = 1;
+		uart_puts("[Task2] Allocated message 3\n");
+		for (int i = 0; i < 19 && "Test message 3"[i]; i++) {
+			msg3->text[i] = "Test message 3"[i];
+		}
+		msg3->text[14] = '\0';
+		err = tk_snd_mbx(demo_mbx_comm, (T_MSG*)msg3);
+		if (err == E_OK) {
+			uart_puts("[Task2] Third message sent successfully\n");
+		}
+	}
+
 	uart_puts("[Task2] Done\n\n");
 
 	/* Idle */
@@ -2916,6 +3132,7 @@ static void check_timeouts(void)
 	TCB **queue_ptr;
 	SEMCB *sem;
 	MTXCB *mtx;
+	MBXCB *mbx;
 	void *obj_start, *obj_end;
 
 	/* Check all tasks for timeout */
@@ -2932,7 +3149,7 @@ static void check_timeouts(void)
 			/* Timeout occurred */
 
 			if (task->wait_obj != NULL) {
-				/* Waiting on an object (semaphore, mutex, etc.) - remove from wait queue */
+				/* Waiting on an object (semaphore, mutex, mailbox, etc.) - remove from wait queue */
 
 				/* Determine object type by checking which table it belongs to */
 				obj_start = (void *)semaphore_table;
@@ -2977,8 +3194,31 @@ static void check_timeouts(void)
 								queue_ptr = &((*queue_ptr)->wait_next);
 							}
 						}
+					} else {
+						/* Check if it's a mailbox */
+						obj_start = (void *)mailbox_table;
+						obj_end = (void *)(&mailbox_table[MAX_MAILBOXES]);
+
+						if (task->wait_obj >= obj_start && task->wait_obj < obj_end) {
+							/* Mailbox receive wait */
+							mbx = (MBXCB *)task->wait_obj;
+
+							/* Remove from mailbox recv queue */
+							if (mbx->recv_queue == task) {
+								mbx->recv_queue = task->wait_next;
+							} else {
+								queue_ptr = &mbx->recv_queue;
+								while (*queue_ptr != NULL) {
+									if ((*queue_ptr)->wait_next == task) {
+										(*queue_ptr)->wait_next = task->wait_next;
+										break;
+									}
+									queue_ptr = &((*queue_ptr)->wait_next);
+								}
+							}
+						}
+						/* If not semaphore, mutex, or mailbox, could be other objects - add handling as needed */
 					}
-					/* If not semaphore or mutex, could be other objects - add handling as needed */
 				}
 
 				/* Set return value to E_TMOUT (timeout error) */
