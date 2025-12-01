@@ -2293,7 +2293,7 @@ static void task1_main(INT stacd, void *exinf)
 
 	/* Wait for task2 to start and acquire semaphore */
 	uart_puts("[Task1] Waiting for Task2 to acquire semaphore...\n\n");
-	tk_dly_tsk(200);  /* Delay 200ms to let Task2 run and acquire semaphore */
+	tk_dly_tsk(50);  /* Delay 50ms to let Task2 run and acquire semaphore */
 
 	/* ===== Test 1: Short timeout - should timeout ===== */
 	test_num++;
@@ -2523,7 +2523,7 @@ static void task2_main(INT stacd, void *exinf)
 	/* Hold it long enough for Task1's Test 1 and Test 2 to timeout */
 	uart_puts("[Task2] Holding semaphore to block Task1...\n");
 	uart_puts("[Task2] (This allows Test 1 and Test 2 to verify timeout)\n\n");
-	for (volatile int i = 0; i < 15000000; i++);  /* Hold for ~150ms */
+	tk_dly_tsk(300);  /* Hold for 300ms - Task1 will wake at 50ms and test timeouts */
 
 	/* Release the semaphore */
 	time = tk_get_tim();
