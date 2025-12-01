@@ -478,6 +478,7 @@ static void schedule(void)
 #define SVC_CRE_MBX		18	/* Create mailbox */
 #define SVC_SND_MBX		19	/* Send message to mailbox */
 #define SVC_RCV_MBX		20	/* Receive message from mailbox */
+#define SVC_WAI_SEM_U		21	/* Wait semaphore with timeout */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -694,6 +695,93 @@ static ER svc_wai_sem(SVC_REGS *regs)
 
 	/* Force task switch - don't return E_OK yet */
 	/* Task will be woken up by sig_sem and will return E_OK then */
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Wait semaphore with timeout (acquire resource)
+ * Input: x0 = semaphore ID, x1 = timeout (TMO)
+ * Output: x0 = E_OK, E_TMOUT, or error
+ */
+static ER svc_wai_sem_u(SVC_REGS *regs)
+{
+	ID semid = (ID)regs->x0;
+	TMO tmo = (TMO)regs->x1;
+	SEMCB *sem = NULL;
+	TCB *current;
+	TCB **queue_ptr;
+	INT i;
+
+	/* Find semaphore */
+	for (i = 0; i < MAX_SEMAPHORES; i++) {
+		if (semaphore_table[i].semid == semid) {
+			sem = &semaphore_table[i];
+			break;
+		}
+	}
+
+	if (sem == NULL) {
+		regs->x0 = E_NOEXS;
+		return E_NOEXS;
+	}
+
+	/* Handle polling case (TMO_POL = 0) */
+	if (tmo == TMO_POL) {
+		if (sem->semcnt > 0) {
+			sem->semcnt--;
+			regs->x0 = E_OK;
+			return E_OK;
+		} else {
+			regs->x0 = E_TMOUT;
+			return E_TMOUT;
+		}
+	}
+
+	/* Check if resource is available */
+	if (sem->semcnt > 0) {
+		/* Resource available, decrement counter */
+		sem->semcnt--;
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* No resource available, put task in wait queue */
+	current = (TCB *)ctxtsk;
+	if (current == NULL) {
+		regs->x0 = E_SYS;
+		return E_SYS;
+	}
+
+	/* Add to end of wait queue */
+	current->state = TS_WAIT;
+	current->wait_next = NULL;
+	current->wait_obj = sem;
+	current->wait_regs = regs;  /* Save register context for timeout handling */
+
+	/* Set timeout: calculate absolute timeout time */
+	if (tmo == TMO_FEVR) {
+		current->wait_timeout = 0;  /* 0 means no timeout */
+	} else {
+		current->wait_timeout = timer_tick_count + tmo;
+	}
+
+	if (sem->wait_queue == NULL) {
+		sem->wait_queue = current;
+	} else {
+		/* Find end of queue */
+		queue_ptr = &sem->wait_queue;
+		while (*queue_ptr != NULL && (*queue_ptr)->wait_next != NULL) {
+			queue_ptr = &((*queue_ptr)->wait_next);
+		}
+		(*queue_ptr)->wait_next = current;
+	}
+
+	/* Schedule next task since current task is now waiting */
+	schedule();
+
+	/* Force task switch - don't return E_OK yet */
+	/* Task will be woken up by sig_sem (return E_OK) or timeout (return E_TMOUT) */
 	regs->x0 = E_OK;
 	return E_OK;
 }
@@ -1641,6 +1729,9 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 	case SVC_RCV_MBX:
 		svc_rcv_mbx(regs);
 		break;
+	case SVC_WAI_SEM_U:
+		svc_wai_sem_u(regs);
+		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
 		uart_puthex((UW)svc_num);
@@ -1813,6 +1904,20 @@ static inline ER tk_wai_sem(ID semid)
 		: "memory"
 	);
 	return (ER)ret;
+}
+
+/* Wait semaphore with timeout */
+static inline ER tk_wai_sem_u(ID semid, TMO tmo)
+{
+	register UW64 r0 __asm__("x0") = semid;
+	register UW64 r1 __asm__("x1") = tmo;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_WAI_SEM_U), "r"(r1)
+		: "memory"
+	);
+	return (ER)r0;
 }
 
 /* Create mutex */
@@ -2153,65 +2258,104 @@ static void free_message(MY_MSG *msg)
 static void task1_main(INT stacd, void *exinf)
 {
 	ID tid;
-	UW64 time;
-	INT count = 0;
-	MY_MSG *msg;
+	UW64 time_start, time_end;
 	ER err;
-	INT priority;
+	INT test_num = 0;
 
 	(void)stacd;
 	(void)exinf;
 
 	/* Get task ID using system call */
 	tid = tk_get_tid();
+	uart_puts("[Task1] Semaphore timeout test started\n");
+	uart_puts("========================================\n\n");
 
-	uart_puts("[Task1] Mailbox sender started\n");
+	/* Give task2 time to start */
+	for (volatile int i = 0; i < 1000000; i++);
 
-	while (1) {
-		/* Simulate work - generate data */
-		for (volatile int i = 0; i < 300000; i++);
+	/* Test 1: Wait with timeout (semaphore should timeout because it's locked by task2) */
+	test_num++;
+	uart_puts("[Task1] Test ");
+	uart_puthex(test_num);
+	uart_puts(": Waiting for semaphore with 100ms timeout...\n");
+	time_start = tk_get_tim();
+	err = tk_wai_sem_u(demo_sem, 100);  /* 100ms timeout */
+	time_end = tk_get_tim();
 
-		time = tk_get_tim();
-		count++;
-
-		/* Allocate message from pool */
-		msg = alloc_message();
-		if (msg == NULL) {
-			uart_puts("[Task1] Message pool exhausted, waiting...\n");
-			/* Wait and try again */
-			for (volatile int i = 0; i < 1000000; i++);
-			continue;
-		}
-
-		/* Assign priority: every 3rd message gets high priority (3), others get low priority (1) */
-		priority = (count % 3 == 0) ? 3 : 1;
-
-		/* Prepare message */
-		msg->header.msgpri = priority;
-		msg->sequence = count;
-		msg->timestamp = (UW)time;
-		msg->value = count * 10;
-
-		/* Send message */
-		uart_puts("[Task1] Sending message #");
-		uart_puthex(count);
-		uart_puts(" priority=");
-		uart_puthex(priority);
-		uart_puts(" value=");
-		uart_puthex(count * 10);
-		uart_puts(" at ");
-		uart_puthex((UW)time);
+	uart_puts("[Task1] Result: ");
+	if (err == E_TMOUT) {
+		uart_puts("TIMEOUT (expected) after ");
+		uart_puthex((UW)(time_end - time_start));
 		uart_puts("ms\n");
+	} else if (err == E_OK) {
+		uart_puts("OK (unexpected - should have timed out!)\n");
+	} else {
+		uart_puts("ERROR ");
+		uart_puthex(err);
+		uart_puts("\n");
+	}
+	uart_puts("\n");
 
-		err = tk_snd_mbx(demo_mbx_comm, (T_MSG*)msg);
-		if (err == E_OK) {
-			uart_puts("[Task1] Message sent successfully\n");
-		} else {
-			uart_puts("[Task1] Send failed\n");
-		}
+	/* Wait a bit */
+	for (volatile int i = 0; i < 1000000; i++);
 
-		/* Wait before next send */
-		for (volatile int i = 0; i < 500000; i++);
+	/* Test 2: Poll (TMO_POL = 0) - should return immediately with TMOUT */
+	test_num++;
+	uart_puts("[Task1] Test ");
+	uart_puthex(test_num);
+	uart_puts(": Polling semaphore (TMO_POL)...\n");
+	time_start = tk_get_tim();
+	err = tk_wai_sem_u(demo_sem, TMO_POL);
+	time_end = tk_get_tim();
+
+	uart_puts("[Task1] Result: ");
+	if (err == E_TMOUT) {
+		uart_puts("TIMEOUT (expected) after ");
+		uart_puthex((UW)(time_end - time_start));
+		uart_puts("ms\n");
+	} else if (err == E_OK) {
+		uart_puts("OK (unexpected - should have timed out!)\n");
+	} else {
+		uart_puts("ERROR ");
+		uart_puthex(err);
+		uart_puts("\n");
+	}
+	uart_puts("\n");
+
+	/* Wait for task2 to finish and signal the semaphore */
+	for (volatile int i = 0; i < 5000000; i++);
+
+	/* Test 3: Wait with timeout when semaphore is available - should succeed immediately */
+	test_num++;
+	uart_puts("[Task1] Test ");
+	uart_puthex(test_num);
+	uart_puts(": Waiting for semaphore with 100ms timeout (should be available now)...\n");
+	time_start = tk_get_tim();
+	err = tk_wai_sem_u(demo_sem, 100);
+	time_end = tk_get_tim();
+
+	uart_puts("[Task1] Result: ");
+	if (err == E_OK) {
+		uart_puts("OK (expected) after ");
+		uart_puthex((UW)(time_end - time_start));
+		uart_puts("ms\n");
+		/* Signal it back */
+		tk_sig_sem(demo_sem);
+	} else if (err == E_TMOUT) {
+		uart_puts("TIMEOUT (unexpected!)\n");
+	} else {
+		uart_puts("ERROR ");
+		uart_puthex(err);
+		uart_puts("\n");
+	}
+	uart_puts("\n");
+
+	uart_puts("[Task1] All tests complete\n");
+	uart_puts("========================================\n\n");
+
+	/* Done testing */
+	while (1) {
+		for (volatile int i = 0; i < 10000000; i++);
 	}
 }
 
@@ -2219,7 +2363,7 @@ static void task2_main(INT stacd, void *exinf)
 {
 	ID tid;
 	UW64 time;
-	MY_MSG *msg;
+	ER err;
 
 	(void)stacd;
 	(void)exinf;
@@ -2227,51 +2371,37 @@ static void task2_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	uart_puts("[Task2] Mailbox receiver started\n");
+	uart_puts("[Task2] Semaphore holder started\n");
 
+	/* Acquire the semaphore immediately to block task1 */
+	time = tk_get_tim();
+	uart_puts("[Task2] Acquiring semaphore at ");
+	uart_puthex((UW)time);
+	uart_puts("ms...\n");
+
+	err = tk_wai_sem(demo_sem);
+	if (err == E_OK) {
+		uart_puts("[Task2] Semaphore acquired\n");
+	} else {
+		uart_puts("[Task2] Failed to acquire semaphore\n");
+	}
+
+	/* Hold it for a while to let task1 timeout */
+	uart_puts("[Task2] Holding semaphore for 300ms...\n");
+	for (volatile int i = 0; i < 3000000; i++);
+
+	/* Release the semaphore */
+	time = tk_get_tim();
+	uart_puts("[Task2] Releasing semaphore at ");
+	uart_puthex((UW)time);
+	uart_puts("ms\n");
+	tk_sig_sem(demo_sem);
+
+	uart_puts("[Task2] Done\n\n");
+
+	/* Idle */
 	while (1) {
-		time = tk_get_tim();
-
-		/* Receive message */
-		uart_puts("[Task2] Waiting for message at ");
-		uart_puthex((UW)time);
-		uart_puts("ms...\n");
-
-		msg = (MY_MSG*)tk_rcv_mbx(demo_mbx_comm);
-
-		time = tk_get_tim();
-
-		if (msg != NULL) {
-			uart_puts("[Task2] Received message at ");
-			uart_puthex((UW)time);
-			uart_puts("ms:\n");
-			uart_puts("  Address: ");
-			uart_puthex((UW64)msg);
-			uart_puts(" Pool index: ");
-			uart_puthex(msg->pool_index);
-			uart_puts("\n");
-			uart_puts("  Priority: ");
-			uart_puthex(msg->header.msgpri);
-			uart_puts("\n");
-			uart_puts("  Sequence: ");
-			uart_puthex(msg->sequence);
-			uart_puts("\n");
-			uart_puts("  Timestamp: ");
-			uart_puthex(msg->timestamp);
-			uart_puts("ms\n");
-			uart_puts("  Value: ");
-			uart_puthex(msg->value);
-			uart_puts("\n");
-
-			/* Simulate processing */
-			for (volatile int i = 0; i < 500000; i++);
-
-			/* Free message back to pool */
-			free_message(msg);
-			uart_puts("[Task2] Message freed back to pool\n");
-		} else {
-			uart_puts("[Task2] Receive failed\n");
-		}
+		for (volatile int i = 0; i < 10000000; i++);
 	}
 }
 
@@ -2405,9 +2535,9 @@ void kernel_main(void)
 	}
 	uart_puts("Semaphore table initialized.\n");
 
-	/* Create demo semaphore (initial count=0, max=10) */
+	/* Create demo semaphore (initial count=1, max=10) - for timeout test */
 	uart_puts("Creating demo semaphore...\n");
-	demo_sem = direct_cre_sem(0, 10);
+	demo_sem = direct_cre_sem(1, 10);
 	uart_puts("Demo semaphore created: ID=");
 	uart_puthex((UW)demo_sem);
 	uart_puts("\n");
@@ -2523,12 +2653,78 @@ void kernel_main(void)
 }
 
 /*
+ * Check for timed-out tasks
+ * Called from timer interrupt handler
+ */
+static void check_timeouts(void)
+{
+	INT i;
+	TCB *task;
+	TCB **queue_ptr;
+	SEMCB *sem;
+
+	/* Check all tasks for timeout */
+	for (i = 0; i < MAX_TASKS; i++) {
+		task = &task_table[i];
+
+		/* Skip if task not waiting or no timeout set */
+		if (task->state != TS_WAIT || task->wait_timeout == 0) {
+			continue;
+		}
+
+		/* Check if timeout has occurred */
+		if ((SYSTIM)timer_tick_count >= task->wait_timeout) {
+			/* Timeout occurred - need to remove from wait queue */
+
+			/* Currently only handling semaphore waits */
+			if (task->wait_obj != NULL) {
+				/* Assume wait_obj is a semaphore */
+				sem = (SEMCB *)task->wait_obj;
+
+				/* Remove from semaphore wait queue */
+				if (sem->wait_queue == task) {
+					/* Task is at head of queue */
+					sem->wait_queue = task->wait_next;
+				} else {
+					/* Find task in queue and remove it */
+					queue_ptr = &sem->wait_queue;
+					while (*queue_ptr != NULL) {
+						if ((*queue_ptr)->wait_next == task) {
+							(*queue_ptr)->wait_next = task->wait_next;
+							break;
+						}
+						queue_ptr = &((*queue_ptr)->wait_next);
+					}
+				}
+			}
+
+			/* Set return value to E_TMOUT */
+			if (task->wait_regs != NULL) {
+				((SVC_REGS *)task->wait_regs)->x0 = E_TMOUT;
+			}
+
+			/* Make task ready */
+			task->state = TS_READY;
+			task->wait_timeout = 0;
+			task->wait_obj = NULL;
+			task->wait_next = NULL;
+			task->wait_regs = NULL;
+
+			/* Task may now be runnable - scheduler will handle it */
+		}
+	}
+}
+
+/*
  * Timer interrupt handler
  */
 void timer_handler(void)
 {
 	/* Increment tick counter */
 	timer_tick_count++;
+
+	/* Check for timed-out tasks */
+	check_timeouts();
 
 	/* Task switching: schedule next task every task_switch_interval ticks */
 	if ((timer_tick_count % task_switch_interval) == 0) {
