@@ -2868,10 +2868,9 @@ void timer_handler(void)
 	/* Check for timed-out tasks */
 	check_timeouts();
 
-	/* Task switching: schedule next task every task_switch_interval ticks */
-	if ((timer_tick_count % task_switch_interval) == 0) {
-		schedule();
-	}
+	/* Always schedule after checking timeouts to ensure tasks made READY
+	 * by timeout expiration run immediately */
+	schedule();
 
 	/* Clear timer interrupt and rearm for next period */
 	clear_hw_timer_interrupt();
