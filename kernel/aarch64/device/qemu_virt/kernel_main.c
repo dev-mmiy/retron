@@ -2258,7 +2258,7 @@ static void free_message(MY_MSG *msg)
 static void task1_main(INT stacd, void *exinf)
 {
 	ID tid;
-	UW64 time_start, time_end;
+	UW64 time_start, time_end, elapsed;
 	ER err;
 	INT test_num = 0;
 
@@ -2267,96 +2267,203 @@ static void task1_main(INT stacd, void *exinf)
 
 	/* Get task ID using system call */
 	tid = tk_get_tid();
-	uart_puts("[Task1] Semaphore timeout test started\n");
+	uart_puts("\n");
+	uart_puts("========================================\n");
+	uart_puts("  Semaphore Timeout Test Suite\n");
 	uart_puts("========================================\n\n");
 
-	/* Give task2 time to start */
-	for (volatile int i = 0; i < 1000000; i++);
+	/* Wait for task2 to start and acquire semaphore */
+	uart_puts("[Task1] Waiting for Task2 to acquire semaphore...\n\n");
+	for (volatile int i = 0; i < 20000000; i++);  /* Long delay to ensure Task2 runs first */
 
-	/* Test 1: Wait with timeout (semaphore should timeout because it's locked by task2) */
+	/* ===== Test 1: Short timeout - should timeout ===== */
 	test_num++;
-	uart_puts("[Task1] Test ");
+	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts(": Waiting for semaphore with 100ms timeout...\n");
+	uart_puts("] Short timeout (50ms) while semaphore held\n");
+	uart_puts("  Expected: E_TMOUT after ~50ms\n");
 	time_start = tk_get_tim();
-	err = tk_wai_sem_u(demo_sem, 100);  /* 100ms timeout */
+	err = tk_wai_sem_u(demo_sem, 50);
 	time_end = tk_get_tim();
+	elapsed = time_end - time_start;
 
-	uart_puts("[Task1] Result: ");
+	uart_puts("  Result: ");
 	if (err == E_TMOUT) {
-		uart_puts("TIMEOUT (expected) after ");
-		uart_puthex((UW)(time_end - time_start));
-		uart_puts("ms\n");
+		uart_puts("E_TMOUT after ");
+		uart_puthex((UW)elapsed);
+		uart_puts("ms ✓ PASS\n\n");
 	} else if (err == E_OK) {
-		uart_puts("OK (got semaphore early - releasing it) after ");
-		uart_puthex((UW)(time_end - time_start));
-		uart_puts("ms\n");
-		tk_sig_sem(demo_sem);  /* Release so task2 can acquire it */
+		uart_puts("E_OK after ");
+		uart_puthex((UW)elapsed);
+		uart_puts("ms ✗ FAIL (should timeout)\n");
+		tk_sig_sem(demo_sem);  /* Release */
+		uart_puts("\n");
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
-		uart_puts("\n");
+		uart_puts(" ✗ FAIL\n\n");
 	}
-	uart_puts("\n");
 
-	/* Wait a bit */
+	/* Short delay between tests */
 	for (volatile int i = 0; i < 1000000; i++);
 
-	/* Test 2: Poll (TMO_POL = 0) - should return immediately with TMOUT */
+	/* ===== Test 2: Poll while unavailable (TMO_POL) ===== */
 	test_num++;
-	uart_puts("[Task1] Test ");
+	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts(": Polling semaphore (TMO_POL)...\n");
+	uart_puts("] Poll (TMO_POL) while semaphore held\n");
+	uart_puts("  Expected: E_TMOUT immediately\n");
 	time_start = tk_get_tim();
 	err = tk_wai_sem_u(demo_sem, TMO_POL);
 	time_end = tk_get_tim();
+	elapsed = time_end - time_start;
 
-	uart_puts("[Task1] Result: ");
+	uart_puts("  Result: ");
 	if (err == E_TMOUT) {
-		uart_puts("TIMEOUT (expected) after ");
-		uart_puthex((UW)(time_end - time_start));
-		uart_puts("ms\n");
+		uart_puts("E_TMOUT after ");
+		uart_puthex((UW)elapsed);
+		uart_puts("ms ✓ PASS\n\n");
 	} else if (err == E_OK) {
-		uart_puts("OK (unexpected - releasing it) after ");
-		uart_puthex((UW)(time_end - time_start));
-		uart_puts("ms\n");
-		tk_sig_sem(demo_sem);  /* Release if we got it */
+		uart_puts("E_OK after ");
+		uart_puthex((UW)elapsed);
+		uart_puts("ms ✗ FAIL (should timeout)\n");
+		tk_sig_sem(demo_sem);
+		uart_puts("\n");
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
-		uart_puts("\n");
+		uart_puts(" ✗ FAIL\n\n");
 	}
-	uart_puts("\n");
 
-	/* Wait for task2 to finish and signal the semaphore */
+	/* ===== Test 3: Long timeout - should succeed after Task2 releases ===== */
+	uart_puts("[Task1] Waiting for Task2 to release semaphore...\n\n");
 	for (volatile int i = 0; i < 5000000; i++);
 
-	/* Test 3: Wait with timeout when semaphore is available - should succeed immediately */
 	test_num++;
-	uart_puts("[Task1] Test ");
+	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts(": Waiting for semaphore with 100ms timeout (should be available now)...\n");
+	uart_puts("] Long timeout (500ms) - semaphore should be available\n");
+	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_wai_sem_u(demo_sem, 100);
+	err = tk_wai_sem_u(demo_sem, 500);
 	time_end = tk_get_tim();
+	elapsed = time_end - time_start;
 
-	uart_puts("[Task1] Result: ");
+	uart_puts("  Result: ");
 	if (err == E_OK) {
-		uart_puts("OK (expected) after ");
-		uart_puthex((UW)(time_end - time_start));
-		uart_puts("ms\n");
-		/* Signal it back */
-		tk_sig_sem(demo_sem);
+		uart_puts("E_OK after ");
+		uart_puthex((UW)elapsed);
+		if (elapsed < 10) {
+			uart_puts("ms ✓ PASS\n\n");
+		} else {
+			uart_puts("ms ⚠ WARNING (too slow)\n\n");
+		}
+		/* Keep semaphore for next test */
 	} else if (err == E_TMOUT) {
-		uart_puts("TIMEOUT (unexpected!)\n");
+		uart_puts("E_TMOUT after ");
+		uart_puthex((UW)elapsed);
+		uart_puts("ms ✗ FAIL (should succeed)\n\n");
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
-		uart_puts("\n");
+		uart_puts(" ✗ FAIL\n\n");
 	}
-	uart_puts("\n");
 
-	uart_puts("[Task1] All tests complete\n");
+	/* ===== Test 4: Poll while holding semaphore (should fail) ===== */
+	test_num++;
+	uart_puts("[Test ");
+	uart_puthex(test_num);
+	uart_puts("] Poll (TMO_POL) while already holding semaphore\n");
+	uart_puts("  Expected: E_TMOUT (count=0)\n");
+	time_start = tk_get_tim();
+	err = tk_wai_sem_u(demo_sem, TMO_POL);
+	time_end = tk_get_tim();
+	elapsed = time_end - time_start;
+
+	uart_puts("  Result: ");
+	if (err == E_TMOUT) {
+		uart_puts("E_TMOUT after ");
+		uart_puthex((UW)elapsed);
+		uart_puts("ms ✓ PASS\n\n");
+	} else if (err == E_OK) {
+		uart_puts("E_OK after ");
+		uart_puthex((UW)elapsed);
+		uart_puts("ms ✗ FAIL (semaphore count should be 0)\n");
+		tk_sig_sem(demo_sem);
+		uart_puts("\n");
+	} else {
+		uart_puts("ERROR ");
+		uart_puthex(err);
+		uart_puts(" ✗ FAIL\n\n");
+	}
+
+	/* Release semaphore for next test */
+	tk_sig_sem(demo_sem);
+
+	/* ===== Test 5: Poll while available (TMO_POL) ===== */
+	test_num++;
+	uart_puts("[Test ");
+	uart_puthex(test_num);
+	uart_puts("] Poll (TMO_POL) while semaphore available\n");
+	uart_puts("  Expected: E_OK immediately\n");
+	time_start = tk_get_tim();
+	err = tk_wai_sem_u(demo_sem, TMO_POL);
+	time_end = tk_get_tim();
+	elapsed = time_end - time_start;
+
+	uart_puts("  Result: ");
+	if (err == E_OK) {
+		uart_puts("E_OK after ");
+		uart_puthex((UW)elapsed);
+		if (elapsed < 5) {
+			uart_puts("ms ✓ PASS\n\n");
+		} else {
+			uart_puts("ms ⚠ WARNING (too slow)\n\n");
+		}
+		tk_sig_sem(demo_sem);
+	} else if (err == E_TMOUT) {
+		uart_puts("E_TMOUT after ");
+		uart_puthex((UW)elapsed);
+		uart_puts("ms ✗ FAIL (should succeed)\n\n");
+	} else {
+		uart_puts("ERROR ");
+		uart_puthex(err);
+		uart_puts(" ✗ FAIL\n\n");
+	}
+
+	/* ===== Test 6: Forever wait (TMO_FEVR) when available ===== */
+	test_num++;
+	uart_puts("[Test ");
+	uart_puthex(test_num);
+	uart_puts("] Forever wait (TMO_FEVR) while semaphore available\n");
+	uart_puts("  Expected: E_OK immediately\n");
+	time_start = tk_get_tim();
+	err = tk_wai_sem_u(demo_sem, TMO_FEVR);
+	time_end = tk_get_tim();
+	elapsed = time_end - time_start;
+
+	uart_puts("  Result: ");
+	if (err == E_OK) {
+		uart_puts("E_OK after ");
+		uart_puthex((UW)elapsed);
+		if (elapsed < 5) {
+			uart_puts("ms ✓ PASS\n\n");
+		} else {
+			uart_puts("ms ⚠ WARNING (too slow)\n\n");
+		}
+		tk_sig_sem(demo_sem);
+	} else if (err == E_TMOUT) {
+		uart_puts("E_TMOUT after ");
+		uart_puthex((UW)elapsed);
+		uart_puts("ms ✗ FAIL (should succeed)\n\n");
+	} else {
+		uart_puts("ERROR ");
+		uart_puthex(err);
+		uart_puts(" ✗ FAIL\n\n");
+	}
+
+	uart_puts("========================================\n");
+	uart_puts("  All Tests Complete!\n");
 	uart_puts("========================================\n\n");
 
 	/* Done testing */
@@ -2383,18 +2490,21 @@ static void task2_main(INT stacd, void *exinf)
 	time = tk_get_tim();
 	uart_puts("[Task2] Acquiring semaphore at ");
 	uart_puthex((UW)time);
-	uart_puts("ms...\n");
+	uart_puts("ms\n");
 
 	err = tk_wai_sem(demo_sem);
 	if (err == E_OK) {
-		uart_puts("[Task2] Semaphore acquired\n");
+		uart_puts("[Task2] Semaphore acquired successfully\n");
 	} else {
-		uart_puts("[Task2] Failed to acquire semaphore\n");
+		uart_puts("[Task2] Failed to acquire semaphore - ERROR ");
+		uart_puthex(err);
+		uart_puts("\n");
 	}
 
-	/* Hold it for a while to let task1 timeout */
-	uart_puts("[Task2] Holding semaphore for 300ms...\n");
-	for (volatile int i = 0; i < 3000000; i++);
+	/* Hold it long enough for Task1's Test 1 and Test 2 to timeout */
+	uart_puts("[Task2] Holding semaphore to block Task1...\n");
+	uart_puts("[Task2] (This allows Test 1 and Test 2 to verify timeout)\n\n");
+	for (volatile int i = 0; i < 15000000; i++);  /* Hold for ~150ms */
 
 	/* Release the semaphore */
 	time = tk_get_tim();
@@ -2403,6 +2513,7 @@ static void task2_main(INT stacd, void *exinf)
 	uart_puts("ms\n");
 	tk_sig_sem(demo_sem);
 
+	uart_puts("[Task2] Semaphore released - Task1 can now acquire it\n");
 	uart_puts("[Task2] Done\n\n");
 
 	/* Idle */
