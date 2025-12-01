@@ -479,6 +479,7 @@ static void schedule(void)
 #define SVC_SND_MBX		19	/* Send message to mailbox */
 #define SVC_RCV_MBX		20	/* Receive message from mailbox */
 #define SVC_WAI_SEM_U		21	/* Wait semaphore with timeout */
+#define SVC_LOC_MTX_U		22	/* Lock mutex with timeout */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -966,6 +967,106 @@ static ER svc_unl_mtx(SVC_REGS *regs)
 
 	/* TODO: Priority inheritance - restore original priority if needed */
 
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Lock mutex with timeout
+ * Input: x0 = mutex ID, x1 = timeout (TMO)
+ * Output: x0 = E_OK, E_TMOUT, or error
+ */
+static ER svc_loc_mtx_u(SVC_REGS *regs)
+{
+	ID mtxid = (ID)regs->x0;
+	TMO tmo = (TMO)regs->x1;
+	MTXCB *mtx = NULL;
+	TCB *current;
+	TCB **queue_ptr;
+	INT i;
+
+	/* Find mutex */
+	for (i = 0; i < MAX_MUTEXES; i++) {
+		if (mutex_table[i].mtxid == mtxid) {
+			mtx = &mutex_table[i];
+			break;
+		}
+	}
+
+	if (mtx == NULL) {
+		regs->x0 = E_NOEXS;
+		return E_NOEXS;
+	}
+
+	current = (TCB *)ctxtsk;
+	if (current == NULL) {
+		regs->x0 = E_SYS;
+		return E_SYS;
+	}
+
+	/* Handle polling case (TMO_POL = 0) */
+	if (tmo == TMO_POL) {
+		if (mtx->locked == 0) {
+			/* Mutex available, lock it */
+			mtx->locked = 1;
+			mtx->owner = current;
+			regs->x0 = E_OK;
+			return E_OK;
+		} else if (mtx->owner == current) {
+			/* Error: recursive lock not supported */
+			regs->x0 = E_SYS;
+			return E_SYS;
+		} else {
+			/* Mutex locked by another task */
+			regs->x0 = E_TMOUT;
+			return E_TMOUT;
+		}
+	}
+
+	/* Check if mutex is available */
+	if (mtx->locked == 0) {
+		/* Mutex available, lock it */
+		mtx->locked = 1;
+		mtx->owner = current;
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* Check if current task already owns it (recursive lock - not allowed) */
+	if (mtx->owner == current) {
+		regs->x0 = E_SYS;  /* Error: recursive lock not supported */
+		return E_SYS;
+	}
+
+	/* Mutex is locked by another task, add to wait queue */
+	current->state = TS_WAIT;
+	current->wait_next = NULL;
+	current->wait_obj = mtx;
+	current->wait_regs = regs;  /* Save register context for timeout handling */
+
+	/* Set timeout: calculate absolute timeout time */
+	if (tmo == TMO_FEVR) {
+		current->wait_timeout = 0;  /* 0 means no timeout */
+	} else {
+		current->wait_timeout = timer_tick_count + tmo;
+	}
+
+	if (mtx->wait_queue == NULL) {
+		mtx->wait_queue = current;
+	} else {
+		/* Find end of queue */
+		queue_ptr = &mtx->wait_queue;
+		while (*queue_ptr != NULL && (*queue_ptr)->wait_next != NULL) {
+			queue_ptr = &((*queue_ptr)->wait_next);
+		}
+		(*queue_ptr)->wait_next = current;
+	}
+
+	/* Schedule next task since current task is now waiting */
+	schedule();
+
+	/* Task will be woken up by unl_mtx (E_OK) or timeout (E_TMOUT) */
+	/* Note: The return value is set by either unl_mtx or check_timeouts */
 	regs->x0 = E_OK;
 	return E_OK;
 }
@@ -1751,6 +1852,9 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 	case SVC_WAI_SEM_U:
 		svc_wai_sem_u(regs);
 		break;
+	case SVC_LOC_MTX_U:
+		svc_loc_mtx_u(regs);
+		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
 		uart_puthex((UW)svc_num);
@@ -1976,6 +2080,20 @@ static inline ER tk_unl_mtx(ID mtxid)
 		: "memory"
 	);
 	return (ER)ret;
+}
+
+/* Lock mutex with timeout */
+static inline ER tk_loc_mtx_u(ID mtxid, TMO tmo)
+{
+	register UW64 r0 __asm__("x0") = mtxid;
+	register UW64 r1 __asm__("x1") = tmo;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_LOC_MTX_U), "r"(r1)
+		: "memory"
+	);
+	return (ER)r0;
 }
 
 /* Create event flag */
@@ -2288,21 +2406,21 @@ static void task1_main(INT stacd, void *exinf)
 	tid = tk_get_tid();
 	uart_puts("\n");
 	uart_puts("========================================\n");
-	uart_puts("  Semaphore Timeout Test Suite\n");
+	uart_puts("  Mutex Timeout Test Suite\n");
 	uart_puts("========================================\n\n");
 
-	/* Wait for task2 to start and acquire semaphore */
-	uart_puts("[Task1] Waiting for Task2 to acquire semaphore...\n\n");
-	tk_dly_tsk(50);  /* Delay 50ms to let Task2 run and acquire semaphore */
+	/* Wait for task2 to start and lock mutex */
+	uart_puts("[Task1] Waiting for Task2 to lock mutex...\n\n");
+	tk_dly_tsk(50);  /* Delay 50ms to let Task2 run and lock mutex */
 
 	/* ===== Test 1: Short timeout - should timeout ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Short timeout (50ms) while semaphore held\n");
+	uart_puts("] Short timeout (50ms) while mutex locked\n");
 	uart_puts("  Expected: E_TMOUT after ~50ms\n");
 	time_start = tk_get_tim();
-	err = tk_wai_sem_u(demo_sem, 50);
+	err = tk_loc_mtx_u(demo_mtx, 50);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2315,7 +2433,7 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		uart_puts("ms ✗ FAIL (should timeout)\n");
-		tk_sig_sem(demo_sem);  /* Release */
+		tk_unl_mtx(demo_mtx);  /* Unlock */
 		uart_puts("\n");
 	} else {
 		uart_puts("ERROR ");
@@ -2326,14 +2444,14 @@ static void task1_main(INT stacd, void *exinf)
 	/* Short delay between tests */
 	for (volatile int i = 0; i < 1000000; i++);
 
-	/* ===== Test 2: Poll while unavailable (TMO_POL) ===== */
+	/* ===== Test 2: Poll while locked (TMO_POL) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) while semaphore held\n");
+	uart_puts("] Poll (TMO_POL) while mutex locked\n");
 	uart_puts("  Expected: E_TMOUT immediately\n");
 	time_start = tk_get_tim();
-	err = tk_wai_sem_u(demo_sem, TMO_POL);
+	err = tk_loc_mtx_u(demo_mtx, TMO_POL);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2346,7 +2464,7 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		uart_puts("ms ✗ FAIL (should timeout)\n");
-		tk_sig_sem(demo_sem);
+		tk_unl_mtx(demo_mtx);
 		uart_puts("\n");
 	} else {
 		uart_puts("ERROR ");
@@ -2354,17 +2472,17 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 3: Long timeout - should succeed after Task2 releases ===== */
-	uart_puts("[Task1] Waiting for Task2 to release semaphore...\n\n");
-	tk_dly_tsk(100);  /* Delay 100ms to let Task2 release semaphore */
+	/* ===== Test 3: Long timeout - should succeed after Task2 unlocks ===== */
+	uart_puts("[Task1] Waiting for Task2 to unlock mutex...\n\n");
+	tk_dly_tsk(100);  /* Delay 100ms to let Task2 unlock mutex */
 
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Long timeout (500ms) - semaphore should be available\n");
+	uart_puts("] Long timeout (500ms) - mutex should be available\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_wai_sem_u(demo_sem, 500);
+	err = tk_loc_mtx_u(demo_mtx, 500);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2377,7 +2495,7 @@ static void task1_main(INT stacd, void *exinf)
 		} else {
 			uart_puts("ms ⚠ WARNING (too slow)\n\n");
 		}
-		/* Keep semaphore for next test */
+		/* Keep mutex locked for next test */
 	} else if (err == E_TMOUT) {
 		uart_puts("E_TMOUT after ");
 		uart_puthex((UW)elapsed);
@@ -2388,27 +2506,26 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 4: Poll while holding semaphore (should fail) ===== */
+	/* ===== Test 4: Poll while already owning mutex (recursive lock - should fail) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) while already holding semaphore\n");
-	uart_puts("  Expected: E_TMOUT (count=0)\n");
+	uart_puts("] Poll (TMO_POL) recursive lock attempt\n");
+	uart_puts("  Expected: E_SYS (recursive lock not allowed)\n");
 	time_start = tk_get_tim();
-	err = tk_wai_sem_u(demo_sem, TMO_POL);
+	err = tk_loc_mtx_u(demo_mtx, TMO_POL);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
 	uart_puts("  Result: ");
-	if (err == E_TMOUT) {
-		uart_puts("E_TMOUT after ");
+	if (err == E_SYS) {
+		uart_puts("E_SYS after ");
 		uart_puthex((UW)elapsed);
 		uart_puts("ms ✓ PASS\n\n");
 	} else if (err == E_OK) {
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (semaphore count should be 0)\n");
-		tk_sig_sem(demo_sem);
+		uart_puts("ms ✗ FAIL (recursive lock should be rejected)\n");
 		uart_puts("\n");
 	} else {
 		uart_puts("ERROR ");
@@ -2416,17 +2533,17 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* Release semaphore for next test */
-	tk_sig_sem(demo_sem);
+	/* Unlock mutex for next test */
+	tk_unl_mtx(demo_mtx);
 
 	/* ===== Test 5: Poll while available (TMO_POL) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) while semaphore available\n");
+	uart_puts("] Poll (TMO_POL) while mutex available\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_wai_sem_u(demo_sem, TMO_POL);
+	err = tk_loc_mtx_u(demo_mtx, TMO_POL);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2439,7 +2556,7 @@ static void task1_main(INT stacd, void *exinf)
 		} else {
 			uart_puts("ms ⚠ WARNING (too slow)\n\n");
 		}
-		tk_sig_sem(demo_sem);
+		tk_unl_mtx(demo_mtx);  /* Unlock for next test */
 	} else if (err == E_TMOUT) {
 		uart_puts("E_TMOUT after ");
 		uart_puthex((UW)elapsed);
@@ -2454,10 +2571,10 @@ static void task1_main(INT stacd, void *exinf)
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Forever wait (TMO_FEVR) while semaphore available\n");
+	uart_puts("] Forever wait (TMO_FEVR) while mutex available\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_wai_sem_u(demo_sem, TMO_FEVR);
+	err = tk_loc_mtx_u(demo_mtx, TMO_FEVR);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2470,7 +2587,7 @@ static void task1_main(INT stacd, void *exinf)
 		} else {
 			uart_puts("ms ⚠ WARNING (too slow)\n\n");
 		}
-		tk_sig_sem(demo_sem);
+		tk_unl_mtx(demo_mtx);  /* Unlock */
 	} else if (err == E_TMOUT) {
 		uart_puts("E_TMOUT after ");
 		uart_puthex((UW)elapsed);
@@ -2503,36 +2620,36 @@ static void task2_main(INT stacd, void *exinf)
 	/* Get task ID using system call */
 	tid = tk_get_tid();
 
-	uart_puts("[Task2] Semaphore holder started\n");
+	uart_puts("[Task2] Mutex locker started\n");
 
-	/* Acquire the semaphore immediately to block task1 */
+	/* Lock the mutex immediately to block task1 */
 	time = tk_get_tim();
-	uart_puts("[Task2] Acquiring semaphore at ");
+	uart_puts("[Task2] Locking mutex at ");
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
 
-	err = tk_wai_sem(demo_sem);
+	err = tk_loc_mtx(demo_mtx);
 	if (err == E_OK) {
-		uart_puts("[Task2] Semaphore acquired successfully\n");
+		uart_puts("[Task2] Mutex locked successfully\n");
 	} else {
-		uart_puts("[Task2] Failed to acquire semaphore - ERROR ");
+		uart_puts("[Task2] Failed to lock mutex - ERROR ");
 		uart_puthex(err);
 		uart_puts("\n");
 	}
 
 	/* Hold it long enough for Task1's Test 1 and Test 2 to timeout */
-	uart_puts("[Task2] Holding semaphore to block Task1...\n");
+	uart_puts("[Task2] Holding mutex to block Task1...\n");
 	uart_puts("[Task2] (This allows Test 1 and Test 2 to verify timeout)\n\n");
 	tk_dly_tsk(300);  /* Hold for 300ms - Task1 will wake at 50ms and test timeouts */
 
-	/* Release the semaphore */
+	/* Unlock the mutex */
 	time = tk_get_tim();
-	uart_puts("[Task2] Releasing semaphore at ");
+	uart_puts("[Task2] Unlocking mutex at ");
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
-	tk_sig_sem(demo_sem);
+	tk_unl_mtx(demo_mtx);
 
-	uart_puts("[Task2] Semaphore released - Task1 can now acquire it\n");
+	uart_puts("[Task2] Mutex unlocked - Task1 can now lock it\n");
 	uart_puts("[Task2] Done\n\n");
 
 	/* Idle */
@@ -2798,6 +2915,8 @@ static void check_timeouts(void)
 	TCB *task;
 	TCB **queue_ptr;
 	SEMCB *sem;
+	MTXCB *mtx;
+	void *obj_start, *obj_end;
 
 	/* Check all tasks for timeout */
 	for (i = 0; i < MAX_TASKS; i++) {
@@ -2814,23 +2933,52 @@ static void check_timeouts(void)
 
 			if (task->wait_obj != NULL) {
 				/* Waiting on an object (semaphore, mutex, etc.) - remove from wait queue */
-				/* Currently only handling semaphore waits */
-				sem = (SEMCB *)task->wait_obj;
 
-				/* Remove from semaphore wait queue */
-				if (sem->wait_queue == task) {
-					/* Task is at head of queue */
-					sem->wait_queue = task->wait_next;
-				} else {
-					/* Find task in queue and remove it */
-					queue_ptr = &sem->wait_queue;
-					while (*queue_ptr != NULL) {
-						if ((*queue_ptr)->wait_next == task) {
-							(*queue_ptr)->wait_next = task->wait_next;
-							break;
+				/* Determine object type by checking which table it belongs to */
+				obj_start = (void *)semaphore_table;
+				obj_end = (void *)(&semaphore_table[MAX_SEMAPHORES]);
+
+				if (task->wait_obj >= obj_start && task->wait_obj < obj_end) {
+					/* Semaphore wait */
+					sem = (SEMCB *)task->wait_obj;
+
+					/* Remove from semaphore wait queue */
+					if (sem->wait_queue == task) {
+						sem->wait_queue = task->wait_next;
+					} else {
+						queue_ptr = &sem->wait_queue;
+						while (*queue_ptr != NULL) {
+							if ((*queue_ptr)->wait_next == task) {
+								(*queue_ptr)->wait_next = task->wait_next;
+								break;
+							}
+							queue_ptr = &((*queue_ptr)->wait_next);
 						}
-						queue_ptr = &((*queue_ptr)->wait_next);
 					}
+				} else {
+					/* Check if it's a mutex */
+					obj_start = (void *)mutex_table;
+					obj_end = (void *)(&mutex_table[MAX_MUTEXES]);
+
+					if (task->wait_obj >= obj_start && task->wait_obj < obj_end) {
+						/* Mutex wait */
+						mtx = (MTXCB *)task->wait_obj;
+
+						/* Remove from mutex wait queue */
+						if (mtx->wait_queue == task) {
+							mtx->wait_queue = task->wait_next;
+						} else {
+							queue_ptr = &mtx->wait_queue;
+							while (*queue_ptr != NULL) {
+								if ((*queue_ptr)->wait_next == task) {
+									(*queue_ptr)->wait_next = task->wait_next;
+									break;
+								}
+								queue_ptr = &((*queue_ptr)->wait_next);
+							}
+						}
+					}
+					/* If not semaphore or mutex, could be other objects - add handling as needed */
 				}
 
 				/* Set return value to E_TMOUT (timeout error) */
