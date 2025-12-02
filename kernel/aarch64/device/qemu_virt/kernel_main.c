@@ -481,6 +481,7 @@ static void schedule(void)
 #define SVC_WAI_SEM_U		21	/* Wait semaphore with timeout */
 #define SVC_LOC_MTX_U		22	/* Lock mutex with timeout */
 #define SVC_RCV_MBX_U		23	/* Receive mailbox with timeout */
+#define SVC_WAI_FLG_U		24	/* Wait event flag with timeout */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -1163,12 +1164,21 @@ static ER svc_set_flg(SVC_REGS *regs)
 				}
 			}
 
+			/* Set return value to E_OK if task has saved register context (timeout variant) */
+			if (waiting_task->wait_regs != NULL) {
+				((SVC_REGS *)waiting_task->wait_regs)->x0 = E_OK;
+			}
+
+			/* Clear timeout since task is being woken up successfully */
+			waiting_task->wait_timeout = 0;
+
 			/* Change task state to READY */
 			waiting_task->state = TS_READY;
 			waiting_task->wait_next = NULL;
 			waiting_task->wait_obj = NULL;
 			waiting_task->wait_flgptn = 0;
 			waiting_task->wait_mode = 0;
+			waiting_task->wait_regs = NULL;
 		} else {
 			/* Condition not satisfied, move to next */
 			prev_ptr = &waiting_task->wait_next;
@@ -1295,6 +1305,134 @@ static ER svc_wai_flg(SVC_REGS *regs)
 	/* Schedule next task since current task is now waiting */
 	schedule();
 
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Wait event flag with timeout
+ * Input: x0 = event flag ID, x1 = wait pattern, x2 = wait mode, x3 = timeout
+ * Output: x0 = E_OK, E_TMOUT, or error
+ */
+static ER svc_wai_flg_u(SVC_REGS *regs)
+{
+	ID flgid = (ID)regs->x0;
+	UW waiptn = (UW)regs->x1;
+	UW wfmode = (UW)regs->x2;
+	TMO tmo = (TMO)regs->x3;
+	FLGCB *flg = NULL;
+	TCB *current;
+	TCB **queue_ptr;
+	INT i;
+	UW match;
+
+	/* Find event flag */
+	for (i = 0; i < MAX_EVENTFLAGS; i++) {
+		if (eventflag_table[i].flgid == flgid) {
+			flg = &eventflag_table[i];
+			break;
+		}
+	}
+
+	if (flg == NULL) {
+		regs->x0 = E_NOEXS;
+		return E_NOEXS;
+	}
+
+	/* Handle polling case (TMO_POL = 0) */
+	if (tmo == TMO_POL) {
+		/* Check if condition is already satisfied */
+		if (wfmode & TWF_ORW) {
+			/* OR wait: at least one bit must match */
+			match = flg->flgptn & waiptn;
+		} else {
+			/* AND wait: all bits must match */
+			match = (flg->flgptn & waiptn) == waiptn;
+		}
+
+		if (match) {
+			/* Condition satisfied */
+			if (wfmode & TWF_CLR) {
+				/* Clear matched bits */
+				if (wfmode & TWF_ORW) {
+					/* OR wait: clear only the matched bits */
+					flg->flgptn &= ~(flg->flgptn & waiptn);
+				} else {
+					/* AND wait: clear all waited bits */
+					flg->flgptn &= ~waiptn;
+				}
+			}
+			regs->x0 = E_OK;
+			return E_OK;
+		} else {
+			/* Condition not satisfied, return timeout immediately */
+			regs->x0 = E_TMOUT;
+			return E_TMOUT;
+		}
+	}
+
+	/* Check if condition is already satisfied */
+	if (wfmode & TWF_ORW) {
+		/* OR wait: at least one bit must match */
+		match = flg->flgptn & waiptn;
+	} else {
+		/* AND wait: all bits must match */
+		match = (flg->flgptn & waiptn) == waiptn;
+	}
+
+	if (match) {
+		/* Condition already satisfied */
+		if (wfmode & TWF_CLR) {
+			/* Clear matched bits */
+			if (wfmode & TWF_ORW) {
+				/* OR wait: clear only the matched bits */
+				flg->flgptn &= ~(flg->flgptn & waiptn);
+			} else {
+				/* AND wait: clear all waited bits */
+				flg->flgptn &= ~waiptn;
+			}
+		}
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* Condition not satisfied, add to wait queue with timeout */
+	current = (TCB *)ctxtsk;
+	if (current == NULL) {
+		regs->x0 = E_SYS;
+		return E_SYS;
+	}
+
+	current->state = TS_WAIT;
+	current->wait_next = NULL;
+	current->wait_obj = flg;
+	current->wait_flgptn = waiptn;
+	current->wait_mode = wfmode;
+	current->wait_regs = regs;  /* Save register context for timeout handling */
+
+	/* Set timeout: calculate absolute timeout time */
+	if (tmo == TMO_FEVR) {
+		current->wait_timeout = 0;  /* 0 means no timeout */
+	} else {
+		current->wait_timeout = timer_tick_count + tmo;
+	}
+
+	if (flg->wait_queue == NULL) {
+		flg->wait_queue = current;
+	} else {
+		/* Find end of queue */
+		queue_ptr = &flg->wait_queue;
+		while (*queue_ptr != NULL && (*queue_ptr)->wait_next != NULL) {
+			queue_ptr = &((*queue_ptr)->wait_next);
+		}
+		(*queue_ptr)->wait_next = current;
+	}
+
+	/* Schedule next task since current task is now waiting */
+	schedule();
+
+	/* Task will be woken up by set_flg (E_OK) or timeout (E_TMOUT) */
+	/* Note: The return value is set by either set_flg or check_timeouts */
 	regs->x0 = E_OK;
 	return E_OK;
 }
@@ -2012,6 +2150,9 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 	case SVC_RCV_MBX_U:
 		svc_rcv_mbx_u(regs);
 		break;
+	case SVC_WAI_FLG_U:
+		svc_wai_flg_u(regs);
+		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
 		uart_puthex((UW)svc_num);
@@ -2309,6 +2450,22 @@ static inline ER tk_wai_flg(ID flgid, UW waiptn, UW wfmode)
 	return (ER)ret;
 }
 
+/* Wait event flag with timeout */
+static inline ER tk_wai_flg_u(ID flgid, UW waiptn, UW wfmode, TMO tmo)
+{
+	register UW64 r0 __asm__("x0") = flgid;
+	register UW64 r1 __asm__("x1") = waiptn;
+	register UW64 r2 __asm__("x2") = wfmode;
+	register UW64 r3 __asm__("x3") = tmo;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_WAI_FLG_U), "r"(r1), "r"(r2), "r"(r3)
+		: "memory"
+	);
+	return (ER)r0;
+}
+
 /* Create message buffer */
 static inline ID tk_cre_mbf(UW bufsz, UW maxmsz)
 {
@@ -2578,23 +2735,21 @@ static void task1_main(INT stacd, void *exinf)
 	tid = tk_get_tid();
 	uart_puts("\n");
 	uart_puts("========================================\n");
-	uart_puts("  Mailbox Timeout Test Suite\n");
+	uart_puts("  Event Flag Timeout Test Suite\n");
 	uart_puts("========================================\n\n");
 
-	/* Wait for task2 to start (mailbox initially empty) */
-	uart_puts("[Task1] Starting tests (mailbox initially empty)...\n\n");
+	/* Wait for task2 to start (event flag initially 0x00) */
+	uart_puts("[Task1] Starting tests (event flag pattern 0x00)...\n\n");
 	tk_dly_tsk(50);  /* Delay 50ms to let Task2 start */
 
-	T_MSG *msg = NULL;
-
-	/* ===== Test 1: Short timeout - should timeout ===== */
+	/* ===== Test 1: Short timeout waiting for bit 0x01 (not set) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Short timeout (50ms) while mailbox empty\n");
+	uart_puts("] Short timeout (50ms) wait for bit 0x01 (not set)\n");
 	uart_puts("  Expected: E_TMOUT after ~50ms\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbx_u(demo_mbx_comm, 50, &msg);
+	err = tk_wai_flg_u(demo_flg, 0x01, TWF_ORW, 50);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2606,9 +2761,7 @@ static void task1_main(INT stacd, void *exinf)
 	} else if (err == E_OK) {
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (should timeout)\n");
-		if (msg) free_message((MY_MSG*)msg);
-		uart_puts("\n");
+		uart_puts("ms ✗ FAIL (should timeout)\n\n");
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
@@ -2618,14 +2771,14 @@ static void task1_main(INT stacd, void *exinf)
 	/* Short delay between tests */
 	for (volatile int i = 0; i < 1000000; i++);
 
-	/* ===== Test 2: Poll while empty (TMO_POL) ===== */
+	/* ===== Test 2: Poll for bit 0x02 not set (TMO_POL) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) while mailbox empty\n");
+	uart_puts("] Poll (TMO_POL) wait for bit 0x02 (not set)\n");
 	uart_puts("  Expected: E_TMOUT immediately\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbx_u(demo_mbx_comm, TMO_POL, &msg);
+	err = tk_wai_flg_u(demo_flg, 0x02, TWF_ORW, TMO_POL);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2637,26 +2790,24 @@ static void task1_main(INT stacd, void *exinf)
 	} else if (err == E_OK) {
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (should timeout)\n");
-		if (msg) free_message((MY_MSG*)msg);
-		uart_puts("\n");
+		uart_puts("ms ✗ FAIL (should timeout)\n\n");
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 3: Long timeout - should succeed after Task2 sends message ===== */
-	uart_puts("[Task1] Waiting for Task2 to send message...\n\n");
-	tk_dly_tsk(100);  /* Delay 100ms to let Task2 send message */
+	/* ===== Test 3: Wait for bit 0x04 - Task2 will set it ===== */
+	uart_puts("[Task1] Waiting for Task2 to set bit 0x04...\n\n");
+	tk_dly_tsk(100);  /* Delay 100ms to let Task2 set flag */
 
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Long timeout (500ms) - message should be available\n");
+	uart_puts("] Long timeout (500ms) wait for bit 0x04 (should be set)\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbx_u(demo_mbx_comm, 500, &msg);
+	err = tk_wai_flg_u(demo_flg, 0x04, TWF_ORW, 500);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2665,15 +2816,9 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		if (elapsed < 10) {
-			uart_puts("ms ✓ PASS\n");
+			uart_puts("ms ✓ PASS\n\n");
 		} else {
-			uart_puts("ms ⚠ WARNING (too slow)\n");
-		}
-		if (msg) {
-			uart_puts("    Message received - Value: ");
-			uart_puthex(((MY_MSG*)msg)->value);
-			uart_puts("\n\n");
-			free_message((MY_MSG*)msg);
+			uart_puts("ms ⚠ WARNING (too slow)\n\n");
 		}
 	} else if (err == E_TMOUT) {
 		uart_puts("E_TMOUT after ");
@@ -2685,14 +2830,14 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 4: Poll while empty again (TMO_POL) ===== */
+	/* ===== Test 4: Poll for bit 0x08 not set (TMO_POL) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) while mailbox empty again\n");
+	uart_puts("] Poll (TMO_POL) wait for bit 0x08 (not set)\n");
 	uart_puts("  Expected: E_TMOUT immediately\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbx_u(demo_mbx_comm, TMO_POL, &msg);
+	err = tk_wai_flg_u(demo_flg, 0x08, TWF_ORW, TMO_POL);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2704,27 +2849,25 @@ static void task1_main(INT stacd, void *exinf)
 	} else if (err == E_OK) {
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (mailbox should be empty)\n");
-		if (msg) free_message((MY_MSG*)msg);
-		uart_puts("\n");
+		uart_puts("ms ✗ FAIL (flag should not be set)\n\n");
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* Wait for Task2 to send another message (Task2 waits 100ms, so we wait 120ms) */
-	uart_puts("[Task1] Waiting for Task2 to send another message...\n\n");
+	/* Wait for Task2 to set another flag (Task2 waits 100ms, so we wait 120ms) */
+	uart_puts("[Task1] Waiting for Task2 to set bit 0x10...\n\n");
 	tk_dly_tsk(120);
 
-	/* ===== Test 5: Poll while message available (TMO_POL) ===== */
+	/* ===== Test 5: Poll for bit 0x10 that is set (TMO_POL) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) while message available\n");
+	uart_puts("] Poll (TMO_POL) wait for bit 0x10 (should be set)\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbx_u(demo_mbx_comm, TMO_POL, &msg);
+	err = tk_wai_flg_u(demo_flg, 0x10, TWF_ORW, TMO_POL);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2733,15 +2876,9 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		if (elapsed < 5) {
-			uart_puts("ms ✓ PASS\n");
+			uart_puts("ms ✓ PASS\n\n");
 		} else {
-			uart_puts("ms ⚠ WARNING (too slow)\n");
-		}
-		if (msg) {
-			uart_puts("    Message received - Value: ");
-			uart_puthex(((MY_MSG*)msg)->value);
-			uart_puts("\n\n");
-			free_message((MY_MSG*)msg);
+			uart_puts("ms ⚠ WARNING (too slow)\n\n");
 		}
 	} else if (err == E_TMOUT) {
 		uart_puts("E_TMOUT after ");
@@ -2753,17 +2890,17 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 6: Forever wait (TMO_FEVR) when message available ===== */
-	uart_puts("[Task1] Waiting for one more message...\n");
+	/* ===== Test 6: Forever wait (TMO_FEVR) when bit 0x20 is available ===== */
+	uart_puts("[Task1] Waiting for Task2 to set bit 0x20...\n");
 	tk_dly_tsk(50);
 
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Forever wait (TMO_FEVR) while message available\n");
+	uart_puts("] Forever wait (TMO_FEVR) for bit 0x20 (should be set)\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbx_u(demo_mbx_comm, TMO_FEVR, &msg);
+	err = tk_wai_flg_u(demo_flg, 0x20, TWF_ORW, TMO_FEVR);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2772,15 +2909,9 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		if (elapsed < 5) {
-			uart_puts("ms ✓ PASS\n");
+			uart_puts("ms ✓ PASS\n\n");
 		} else {
-			uart_puts("ms ⚠ WARNING (too slow)\n");
-		}
-		if (msg) {
-			uart_puts("    Message received - Value: ");
-			uart_puthex(((MY_MSG*)msg)->value);
-			uart_puts("\n\n");
-			free_message((MY_MSG*)msg);
+			uart_puts("ms ⚠ WARNING (too slow)\n\n");
 		}
 	} else if (err == E_TMOUT) {
 		uart_puts("E_TMOUT after ");
@@ -2813,65 +2944,43 @@ static void task2_main(INT stacd, void *exinf)
 
 	/* Get task ID using system call */
 	tid = tk_get_tid();
-	MY_MSG *msg1, *msg2, *msg3;
 
-	uart_puts("[Task2] Message sender started\n");
+	uart_puts("[Task2] Event flag setter started\n");
 
-	/* Keep mailbox empty initially for Test 1 and Test 2 */
-	uart_puts("[Task2] Waiting (mailbox empty for Task1's Test 1 and Test 2)...\n\n");
+	/* Keep flag at 0x00 initially for Test 1 and Test 2 */
+	uart_puts("[Task2] Waiting (flag=0x00 for Task1's Test 1 and Test 2)...\n\n");
 	tk_dly_tsk(300);  /* Wait for 300ms - Task1 will test timeouts */
 
-	/* Send first message for Test 3 */
+	/* Set bit 0x04 for Test 3 */
 	time = tk_get_tim();
-	uart_puts("[Task2] Sending first message at ");
+	uart_puts("[Task2] Setting bit 0x04 at ");
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
-
-	msg1 = alloc_message();
-	if (msg1) {
-		msg1->header.msgpri = 1;
-		msg1->value = 0x1111;  /* Test value 1 */
-		uart_puts("[Task2] Allocated message 1\n");
-		err = tk_snd_mbx(demo_mbx_comm, (T_MSG*)msg1);
-		if (err == E_OK) {
-			uart_puts("[Task2] First message sent successfully\n\n");
-		}
+	err = tk_set_flg(demo_flg, 0x04);
+	if (err == E_OK) {
+		uart_puts("[Task2] Bit 0x04 set successfully\n\n");
 	}
 
-	/* Wait for Task1 Test 4, then send second message for Test 5 */
+	/* Wait for Task1 Test 4, then set bit 0x10 for Test 5 */
 	tk_dly_tsk(100);
 	time = tk_get_tim();
-	uart_puts("[Task2] Sending second message at ");
+	uart_puts("[Task2] Setting bit 0x10 at ");
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
-
-	msg2 = alloc_message();
-	if (msg2) {
-		msg2->header.msgpri = 1;
-		msg2->value = 0x2222;  /* Test value 2 */
-		uart_puts("[Task2] Allocated message 2\n");
-		err = tk_snd_mbx(demo_mbx_comm, (T_MSG*)msg2);
-		if (err == E_OK) {
-			uart_puts("[Task2] Second message sent successfully\n\n");
-		}
+	err = tk_set_flg(demo_flg, 0x10);
+	if (err == E_OK) {
+		uart_puts("[Task2] Bit 0x10 set successfully\n\n");
 	}
 
-	/* Send third message for Test 6 */
+	/* Set bit 0x20 for Test 6 */
 	tk_dly_tsk(50);
 	time = tk_get_tim();
-	uart_puts("[Task2] Sending third message at ");
+	uart_puts("[Task2] Setting bit 0x20 at ");
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
-
-	msg3 = alloc_message();
-	if (msg3) {
-		msg3->header.msgpri = 1;
-		msg3->value = 0x3333;  /* Test value 3 */
-		uart_puts("[Task2] Allocated message 3\n");
-		err = tk_snd_mbx(demo_mbx_comm, (T_MSG*)msg3);
-		if (err == E_OK) {
-			uart_puts("[Task2] Third message sent successfully\n");
-		}
+	err = tk_set_flg(demo_flg, 0x20);
+	if (err == E_OK) {
+		uart_puts("[Task2] Bit 0x20 set successfully\n");
 	}
 
 	uart_puts("[Task2] Done\n\n");
@@ -3141,6 +3250,7 @@ static void check_timeouts(void)
 	SEMCB *sem;
 	MTXCB *mtx;
 	MBXCB *mbx;
+	FLGCB *flg;
 	void *obj_start, *obj_end;
 
 	/* Check all tasks for timeout */
@@ -3224,8 +3334,31 @@ static void check_timeouts(void)
 									queue_ptr = &((*queue_ptr)->wait_next);
 								}
 							}
+						} else {
+							/* Check if it's an event flag */
+							obj_start = (void *)eventflag_table;
+							obj_end = (void *)(&eventflag_table[MAX_EVENTFLAGS]);
+
+							if (task->wait_obj >= obj_start && task->wait_obj < obj_end) {
+								/* Event flag wait */
+								flg = (FLGCB *)task->wait_obj;
+
+								/* Remove from event flag wait queue */
+								if (flg->wait_queue == task) {
+									flg->wait_queue = task->wait_next;
+								} else {
+									queue_ptr = &flg->wait_queue;
+									while (*queue_ptr != NULL) {
+										if ((*queue_ptr)->wait_next == task) {
+											(*queue_ptr)->wait_next = task->wait_next;
+											break;
+										}
+										queue_ptr = &((*queue_ptr)->wait_next);
+									}
+								}
+							}
+							/* If not semaphore, mutex, mailbox, or event flag, could be other objects - add handling as needed */
 						}
-						/* If not semaphore, mutex, or mailbox, could be other objects - add handling as needed */
 					}
 				}
 
