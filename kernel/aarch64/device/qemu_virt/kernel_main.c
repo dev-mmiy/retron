@@ -3187,7 +3187,7 @@ static void task1_main(INT stacd, void *exinf)
 
 	/* ===== Test 3: Long timeout - Task2 will send message ===== */
 	uart_puts("[Task1] Waiting for Task2 to send message...\n\n");
-	tk_dly_tsk(120);  /* Delay 120ms to let Task2 send */
+	tk_dly_tsk(200);  /* Delay 200ms to let Task2 send */
 
 	test_num++;
 	uart_puts("[Test ");
@@ -3287,7 +3287,7 @@ static void task1_main(INT stacd, void *exinf)
 
 	/* ===== Test 6: Forever wait (TMO_FEVR) when message available ===== */
 	uart_puts("[Task1] Waiting for Task2 to send message...\n");
-	tk_dly_tsk(120);
+	tk_dly_tsk(80);
 
 	test_num++;
 	uart_puts("[Test ");
@@ -3350,9 +3350,9 @@ static void task2_main(INT stacd, void *exinf)
 
 	/* Keep buffer empty for Test 1 and Test 2 */
 	uart_puts("[Task2] Waiting for Task1 to test receive from empty buffer...\n\n");
-	tk_dly_tsk(300);  /* Wait for 300ms - Task1 will test timeouts */
+	tk_dly_tsk(200);  /* Wait for 200ms - Task1 will test timeouts */
 
-	/* Send first message for Test 3 */
+	/* Send first message for Test 3 (before Task1 tries to receive at ~300ms) */
 	time = tk_get_tim();
 	uart_puts("[Task2] Sending 64-byte message at ");
 	uart_puthex((UW)time);
@@ -3362,17 +3362,16 @@ static void task2_main(INT stacd, void *exinf)
 		uart_puts("[Task2] Sent 64-byte message\n\n");
 	}
 
-	/* Send second message for Test 4 */
+	/* Send second message for Test 4 (immediately after) */
 	err = tk_snd_mbf(demo_mbf, send_msg, 32);
 	if (err == E_OK) {
 		uart_puts("[Task2] Sent 32-byte message\n\n");
 	}
 
-	/* Wait for Test 4 and Test 5 to complete */
-	tk_dly_tsk(50);
+	/* Wait for Test 3, 4, and 5 to complete */
+	tk_dly_tsk(150);
 
-	/* Send third message for Test 6 */
-	tk_dly_tsk(100);
+	/* Send third message for Test 6 (before Task1 tries to receive at ~380ms) */
 	time = tk_get_tim();
 	uart_puts("[Task2] Sending 16-byte message at ");
 	uart_puthex((UW)time);
