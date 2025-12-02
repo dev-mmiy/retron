@@ -2653,9 +2653,9 @@ static void task1_main(INT stacd, void *exinf)
 			uart_puts("ms ⚠ WARNING (too slow)\n");
 		}
 		if (msg) {
-			uart_puts("    Message received: \"");
-			uart_puts(((MY_MSG*)msg)->text);
-			uart_puts("\"\n\n");
+			uart_puts("    Message received - Value: ");
+			uart_puthex(((MY_MSG*)msg)->value);
+			uart_puts("\n\n");
 			free_message((MY_MSG*)msg);
 		}
 	} else if (err == E_TMOUT) {
@@ -2721,9 +2721,9 @@ static void task1_main(INT stacd, void *exinf)
 			uart_puts("ms ⚠ WARNING (too slow)\n");
 		}
 		if (msg) {
-			uart_puts("    Message received: \"");
-			uart_puts(((MY_MSG*)msg)->text);
-			uart_puts("\"\n\n");
+			uart_puts("    Message received - Value: ");
+			uart_puthex(((MY_MSG*)msg)->value);
+			uart_puts("\n\n");
 			free_message((MY_MSG*)msg);
 		}
 	} else if (err == E_TMOUT) {
@@ -2760,9 +2760,9 @@ static void task1_main(INT stacd, void *exinf)
 			uart_puts("ms ⚠ WARNING (too slow)\n");
 		}
 		if (msg) {
-			uart_puts("    Message received: \"");
-			uart_puts(((MY_MSG*)msg)->text);
-			uart_puts("\"\n\n");
+			uart_puts("    Message received - Value: ");
+			uart_puthex(((MY_MSG*)msg)->value);
+			uart_puts("\n\n");
 			free_message((MY_MSG*)msg);
 		}
 	} else if (err == E_TMOUT) {
@@ -2810,14 +2810,11 @@ static void task2_main(INT stacd, void *exinf)
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
 
-	msg1 = allocate_message();
+	msg1 = alloc_message();
 	if (msg1) {
 		msg1->header.msgpri = 1;
+		msg1->value = 0x1111;  /* Test value 1 */
 		uart_puts("[Task2] Allocated message 1\n");
-		for (int i = 0; i < 19 && "Test message 1"[i]; i++) {
-			msg1->text[i] = "Test message 1"[i];
-		}
-		msg1->text[14] = '\0';
 		err = tk_snd_mbx(demo_mbx_comm, (T_MSG*)msg1);
 		if (err == E_OK) {
 			uart_puts("[Task2] First message sent successfully\n\n");
@@ -2831,14 +2828,11 @@ static void task2_main(INT stacd, void *exinf)
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
 
-	msg2 = allocate_message();
+	msg2 = alloc_message();
 	if (msg2) {
 		msg2->header.msgpri = 1;
+		msg2->value = 0x2222;  /* Test value 2 */
 		uart_puts("[Task2] Allocated message 2\n");
-		for (int i = 0; i < 19 && "Test message 2"[i]; i++) {
-			msg2->text[i] = "Test message 2"[i];
-		}
-		msg2->text[14] = '\0';
 		err = tk_snd_mbx(demo_mbx_comm, (T_MSG*)msg2);
 		if (err == E_OK) {
 			uart_puts("[Task2] Second message sent successfully\n\n");
@@ -2852,14 +2846,11 @@ static void task2_main(INT stacd, void *exinf)
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
 
-	msg3 = allocate_message();
+	msg3 = alloc_message();
 	if (msg3) {
 		msg3->header.msgpri = 1;
+		msg3->value = 0x3333;  /* Test value 3 */
 		uart_puts("[Task2] Allocated message 3\n");
-		for (int i = 0; i < 19 && "Test message 3"[i]; i++) {
-			msg3->text[i] = "Test message 3"[i];
-		}
-		msg3->text[14] = '\0';
 		err = tk_snd_mbx(demo_mbx_comm, (T_MSG*)msg3);
 		if (err == E_OK) {
 			uart_puts("[Task2] Third message sent successfully\n");
