@@ -47,7 +47,9 @@ typedef enum {
 	TS_DORMANT	= 1,	/* Dormant */
 	TS_READY	= 2,	/* Ready */
 	TS_RUN		= 3,	/* Running */
-	TS_WAIT		= 4	/* Waiting */
+	TS_WAIT		= 4,	/* Waiting */
+	TS_SUSPEND	= 5,	/* Suspended */
+	TS_WAITSUS	= 6	/* Waiting and Suspended */
 } TSTAT;
 
 /*
@@ -94,6 +96,9 @@ typedef struct tcb {
 
 	/* Task sleep/wakeup information */
 	INT		wakeup_count;	/* Pending wakeup count */
+
+	/* Task suspend/resume information */
+	INT		suspend_count;	/* Suspend count (0=not suspended, >0=suspended) */
 } TCB;
 
 /*
@@ -402,6 +407,7 @@ static ER create_task(INT idx, ID tskid, TASK_FP task, void *stack, INT stksz)
 	tcb->wait_timeout = 0;
 	tcb->wait_regs = NULL;
 	tcb->wakeup_count = 0;
+	tcb->suspend_count = 0;
 
 	setup_task_context(tcb, task, stack, stksz);
 
@@ -492,6 +498,9 @@ static void schedule(void)
 #define SVC_RCV_MBF_U		26	/* Receive message buffer with timeout */
 #define SVC_SLP_TSK_U		27	/* Sleep task with timeout */
 #define SVC_WUP_TSK		28	/* Wakeup task */
+#define SVC_SUS_TSK		29	/* Suspend task */
+#define SVC_RSM_TSK		30	/* Resume task */
+#define SVC_FRSM_TSK		31	/* Force resume task */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -2185,6 +2194,161 @@ static ER svc_wup_tsk(SVC_REGS *regs)
 		regs->x0 = E_OBJ;  /* Object state error */
 		return E_OBJ;
 	}
+}
+
+/*
+ * System call: Suspend task
+ * Arguments: x0 = tskid
+ * Returns: E_OK or error code
+ */
+static ER svc_sus_tsk(SVC_REGS *regs)
+{
+	ID tskid = (ID)regs->x0;
+	TCB *target_task = NULL;
+	TCB *current;
+	INT i;
+
+	/* Cannot suspend self */
+	current = (TCB *)ctxtsk;
+	if (current != NULL && current->tskid == tskid) {
+		regs->x0 = E_OBJ;
+		return E_OBJ;
+	}
+
+	/* Find target task */
+	for (i = 0; i < MAX_TASKS; i++) {
+		if (task_table[i].tskid == tskid) {
+			target_task = &task_table[i];
+			break;
+		}
+	}
+
+	if (target_task == NULL) {
+		regs->x0 = E_NOEXS;
+		return E_NOEXS;
+	}
+
+	/* Check for suspend count overflow */
+	if (target_task->suspend_count >= 0x7FFFFFFF) {
+		regs->x0 = E_QOVR;  /* Queue overflow */
+		return E_QOVR;
+	}
+
+	/* Increment suspend count */
+	target_task->suspend_count++;
+
+	/* If this is the first suspend, change state */
+	if (target_task->suspend_count == 1) {
+		if (target_task->state == TS_READY || target_task->state == TS_RUN) {
+			/* Change to suspended state */
+			target_task->state = TS_SUSPEND;
+			/* If suspending running task, trigger reschedule */
+			if (target_task == current) {
+				schedule();
+			}
+		} else if (target_task->state == TS_WAIT) {
+			/* Change to waiting+suspended state */
+			target_task->state = TS_WAITSUS;
+		}
+		/* If already SUSPEND or WAITSUS, count is already >0, no state change needed */
+	}
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Resume task
+ * Arguments: x0 = tskid
+ * Returns: E_OK or error code
+ */
+static ER svc_rsm_tsk(SVC_REGS *regs)
+{
+	ID tskid = (ID)regs->x0;
+	TCB *target_task = NULL;
+	INT i;
+
+	/* Find target task */
+	for (i = 0; i < MAX_TASKS; i++) {
+		if (task_table[i].tskid == tskid) {
+			target_task = &task_table[i];
+			break;
+		}
+	}
+
+	if (target_task == NULL) {
+		regs->x0 = E_NOEXS;
+		return E_NOEXS;
+	}
+
+	/* Check if task is suspended */
+	if (target_task->suspend_count == 0) {
+		regs->x0 = E_OBJ;  /* Task is not suspended */
+		return E_OBJ;
+	}
+
+	/* Decrement suspend count */
+	target_task->suspend_count--;
+
+	/* If count reaches 0, resume task */
+	if (target_task->suspend_count == 0) {
+		if (target_task->state == TS_SUSPEND) {
+			/* Change to ready state */
+			target_task->state = TS_READY;
+		} else if (target_task->state == TS_WAITSUS) {
+			/* Change back to waiting state */
+			target_task->state = TS_WAIT;
+		}
+	}
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Force resume task
+ * Arguments: x0 = tskid
+ * Returns: E_OK or error code
+ */
+static ER svc_frsm_tsk(SVC_REGS *regs)
+{
+	ID tskid = (ID)regs->x0;
+	TCB *target_task = NULL;
+	INT i;
+
+	/* Find target task */
+	for (i = 0; i < MAX_TASKS; i++) {
+		if (task_table[i].tskid == tskid) {
+			target_task = &task_table[i];
+			break;
+		}
+	}
+
+	if (target_task == NULL) {
+		regs->x0 = E_NOEXS;
+		return E_NOEXS;
+	}
+
+	/* Check if task is suspended */
+	if (target_task->suspend_count == 0) {
+		regs->x0 = E_OBJ;  /* Task is not suspended */
+		return E_OBJ;
+	}
+
+	/* Force suspend count to 0 */
+	target_task->suspend_count = 0;
+
+	/* Resume task regardless of how many times it was suspended */
+	if (target_task->state == TS_SUSPEND) {
+		/* Change to ready state */
+		target_task->state = TS_READY;
+	} else if (target_task->state == TS_WAITSUS) {
+		/* Change back to waiting state */
+		target_task->state = TS_WAIT;
+	}
+
+	regs->x0 = E_OK;
+	return E_OK;
 }
 
 /*
