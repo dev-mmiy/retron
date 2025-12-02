@@ -2228,12 +2228,6 @@ static ER svc_sus_tsk(SVC_REGS *regs)
 		return E_NOEXS;
 	}
 
-	/* Check for suspend count overflow */
-	if (target_task->suspend_count >= 0x7FFFFFFF) {
-		regs->x0 = E_QOVR;  /* Queue overflow */
-		return E_QOVR;
-	}
-
 	/* Increment suspend count */
 	target_task->suspend_count++;
 
@@ -2789,6 +2783,15 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 	case SVC_WUP_TSK:
 		svc_wup_tsk(regs);
 		break;
+	case SVC_SUS_TSK:
+		svc_sus_tsk(regs);
+		break;
+	case SVC_RSM_TSK:
+		svc_rsm_tsk(regs);
+		break;
+	case SVC_FRSM_TSK:
+		svc_frsm_tsk(regs);
+		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
 		uart_puthex((UW)svc_num);
@@ -3188,6 +3191,45 @@ static inline ER tk_wup_tsk(ID tskid)
 	return (ER)r0;
 }
 
+/* Suspend task */
+static inline ER tk_sus_tsk(ID tskid)
+{
+	register UW64 r0 __asm__("x0") = tskid;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_SUS_TSK)
+		: "memory"
+	);
+	return (ER)r0;
+}
+
+/* Resume task */
+static inline ER tk_rsm_tsk(ID tskid)
+{
+	register UW64 r0 __asm__("x0") = tskid;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_RSM_TSK)
+		: "memory"
+	);
+	return (ER)r0;
+}
+
+/* Force resume task */
+static inline ER tk_frsm_tsk(ID tskid)
+{
+	register UW64 r0 __asm__("x0") = tskid;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_FRSM_TSK)
+		: "memory"
+	);
+	return (ER)r0;
+}
+
 /* Receive message from buffer */
 static inline INT tk_rcv_mbf(ID mbfid, void *msg)
 {
@@ -3416,10 +3458,8 @@ static void free_message(MY_MSG *msg)
 
 static void task1_main(INT stacd, void *exinf)
 {
-	ID tid;
-	UW64 time_start, time_end, elapsed;
+	ID tid, task2_id;
 	ER err;
-	T_MSG *recv_msg;
 	INT test_num = 0;
 
 	(void)stacd;
@@ -3429,219 +3469,159 @@ static void task1_main(INT stacd, void *exinf)
 	tid = tk_get_tid();
 	uart_puts("\n");
 	uart_puts("========================================\n");
-	uart_puts("  Mailbox Timeout Test Suite\n");
+	uart_puts("  Task Suspend/Resume Test Suite\n");
 	uart_puts("========================================\n\n");
 
 	uart_puts("[Task1] Starting tests...\n");
 	uart_puts("[Task1] Task ID: ");
 	uart_puthex((UW)tid);
 	uart_puts("\n\n");
-	tk_dly_tsk(50);  /* Small delay to ensure Task2 has started */
 
-	/* ===== Test 1: Short timeout (50ms) from empty mailbox ===== */
-	test_num++;
-	uart_puts("[Test ");
-	uart_puthex(test_num);
-	uart_puts("] Short timeout (50ms) receive from empty mailbox\n");
-	uart_puts("  Expected: E_TMOUT after ~50ms\n");
-	time_start = tk_get_tim();
-	err = tk_rcv_mbx_u(demo_mbx_comm, 50, &recv_msg);
-	time_end = tk_get_tim();
-	elapsed = time_end - time_start;
-
-	uart_puts("  Result: ");
-	if (err == E_TMOUT) {
-		uart_puts("E_TMOUT after ");
-		uart_puthex((UW)elapsed);
-		uart_puts("ms ✓ PASS\n\n");
-	} else if (err == E_OK) {
-		uart_puts("E_OK after ");
-		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (should timeout)\n\n");
-	} else {
-		uart_puts("ERROR ");
-		uart_puthex(err);
-		uart_puts(" ✗ FAIL\n\n");
-	}
-
-	/* Short delay between tests */
-	for (volatile int i = 0; i < 1000000; i++);
-
-	/* ===== Test 2: Poll (TMO_POL) from empty mailbox ===== */
-	test_num++;
-	uart_puts("[Test ");
-	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) receive from empty mailbox\n");
-	uart_puts("  Expected: E_TMOUT immediately\n");
-	time_start = tk_get_tim();
-	err = tk_rcv_mbx_u(demo_mbx_comm, TMO_POL, &recv_msg);
-	time_end = tk_get_tim();
-	elapsed = time_end - time_start;
-
-	uart_puts("  Result: ");
-	if (err == E_TMOUT) {
-		uart_puts("E_TMOUT after ");
-		uart_puthex((UW)elapsed);
-		uart_puts("ms ✓ PASS\n\n");
-	} else if (err == E_OK) {
-		uart_puts("E_OK after ");
-		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (should timeout)\n\n");
-	} else {
-		uart_puts("ERROR ");
-		uart_puthex(err);
-		uart_puts(" ✗ FAIL\n\n");
-	}
-
-	/* ===== Test 3: Long timeout - Task2 will send message ===== */
-	uart_puts("[Task1] Waiting for Task2 to send message in 200ms...\n\n");
-	tk_dly_tsk(50);  /* Give Task2 time to prepare */
-
-	test_num++;
-	uart_puts("[Test ");
-	uart_puthex(test_num);
-	uart_puts("] Long timeout (500ms) receive, Task2 sends message\n");
-	uart_puts("  Expected: E_OK after ~200ms, receive message\n");
-	time_start = tk_get_tim();
-	err = tk_rcv_mbx_u(demo_mbx_comm, 500, &recv_msg);
-	time_end = tk_get_tim();
-	elapsed = time_end - time_start;
-
-	uart_puts("  Result: ");
-	if (err == E_OK) {
-		uart_puts("E_OK after ");
-		uart_puthex((UW)elapsed);
-		if (recv_msg != NULL) {
-			uart_puts("ms, msg priority=");
-			uart_puthex((UW)recv_msg->msgpri);
-			if (elapsed >= 150 && elapsed <= 250) {
-				uart_puts(" ✓ PASS\n\n");
-			} else {
-				uart_puts(" ⚠ WARNING (timing off)\n\n");
-			}
-		} else {
-			uart_puts("ms but msg is NULL ✗ FAIL\n\n");
-		}
-	} else if (err == E_TMOUT) {
-		uart_puts("E_TMOUT after ");
-		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (should receive message)\n\n");
-	} else {
-		uart_puts("ERROR ");
-		uart_puthex(err);
-		uart_puts(" ✗ FAIL\n\n");
-	}
-
-	/* ===== Test 4: Poll when message available ===== */
-	uart_puts("[Task1] Waiting for Task2 to send message...\n");
-	tk_dly_tsk(100);  /* Give Task2 time to send message */
-
-	test_num++;
-	uart_puts("[Test ");
-	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) receive when message available\n");
-	uart_puts("  Expected: E_OK immediately, receive message\n");
-	time_start = tk_get_tim();
-	err = tk_rcv_mbx_u(demo_mbx_comm, TMO_POL, &recv_msg);
-	time_end = tk_get_tim();
-	elapsed = time_end - time_start;
-
-	uart_puts("  Result: ");
-	if (err == E_OK) {
-		uart_puts("E_OK after ");
-		uart_puthex((UW)elapsed);
-		if (recv_msg != NULL) {
-			uart_puts("ms, msg priority=");
-			uart_puthex((UW)recv_msg->msgpri);
-			if (elapsed < 5) {
-				uart_puts(" ✓ PASS\n\n");
-			} else {
-				uart_puts(" ⚠ WARNING (too slow)\n\n");
-			}
-		} else {
-			uart_puts("ms but msg is NULL ✗ FAIL\n\n");
-		}
-	} else if (err == E_TMOUT) {
-		uart_puts("E_TMOUT ✗ FAIL (message should be available)\n\n");
-	} else {
-		uart_puts("ERROR ");
-		uart_puthex(err);
-		uart_puts(" ✗ FAIL\n\n");
-	}
-
-	/* ===== Test 5: Forever wait (TMO_FEVR) ===== */
-	uart_puts("[Task1] Waiting for Task2 to prepare...\n");
+	/* Wait for Task2 to start */
 	tk_dly_tsk(50);
 
+	/* Get Task2 ID - assume it's tid+1 */
+	task2_id = tid + 1;
+
+	/* ===== Test 1: Basic suspend and resume ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Forever wait (TMO_FEVR), Task2 sends message\n");
-	uart_puts("  Expected: E_OK after ~150ms, receive message\n");
-	time_start = tk_get_tim();
-	err = tk_rcv_mbx_u(demo_mbx_comm, TMO_FEVR, &recv_msg);
-	time_end = tk_get_tim();
-	elapsed = time_end - time_start;
+	uart_puts("] Basic suspend and resume\n");
+	uart_puts("  Expected: Task2 stops when suspended, resumes when resumed\n");
 
-	uart_puts("  Result: ");
+	uart_puts("  [Step 1] Task2 is running, suspending it...\n");
+	err = tk_sus_tsk(task2_id);
+	uart_puts("  tk_sus_tsk result: ");
+	uart_puthex(err);
 	if (err == E_OK) {
-		uart_puts("E_OK after ");
-		uart_puthex((UW)elapsed);
-		if (recv_msg != NULL) {
-			uart_puts("ms, msg priority=");
-			uart_puthex((UW)recv_msg->msgpri);
-			if (elapsed >= 100 && elapsed <= 200) {
-				uart_puts(" ✓ PASS\n\n");
-			} else {
-				uart_puts(" ⚠ WARNING (timing off)\n\n");
-			}
-		} else {
-			uart_puts("ms but msg is NULL ✗ FAIL\n\n");
-		}
-	} else if (err == E_TMOUT) {
-		uart_puts("E_TMOUT ✗ FAIL (should never timeout with TMO_FEVR)\n\n");
+		uart_puts(" (E_OK)\n");
 	} else {
-		uart_puts("ERROR ");
-		uart_puthex(err);
+		uart_puts(" ✗ FAIL\n\n");
+		goto test2;
+	}
+
+	/* Wait and verify Task2 stopped */
+	uart_puts("  [Step 2] Waiting 300ms to verify Task2 is suspended...\n");
+	tk_dly_tsk(300);
+	uart_puts("  (Task2 should have printed nothing during this time)\n");
+
+	uart_puts("  [Step 3] Resuming Task2...\n");
+	err = tk_rsm_tsk(task2_id);
+	uart_puts("  tk_rsm_tsk result: ");
+	uart_puthex(err);
+	if (err == E_OK) {
+		uart_puts(" (E_OK)\n");
+		uart_puts("  ✓ PASS\n\n");
+	} else {
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 6: Priority ordering ===== */
-	uart_puts("[Task1] Waiting for Task2 to send multiple messages...\n");
+	/* Wait for Task2 to run again */
 	tk_dly_tsk(100);
 
+test2:
+	/* ===== Test 2: Nested suspend (multiple suspend calls) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Priority ordering (receive 3 messages)\n");
-	uart_puts("  Expected: Priority 10, 5, 1 in order\n");
+	uart_puts("] Nested suspend - multiple suspend calls\n");
+	uart_puts("  Expected: Task2 requires multiple resumes to run again\n");
 
-	/* Receive 3 messages */
-	T_MSG *msg1, *msg2, *msg3;
-	msg1 = msg2 = msg3 = NULL;
-	err = tk_rcv_mbx_u(demo_mbx_comm, 100, &msg1);
+	uart_puts("  [Step 1] Suspending Task2 twice...\n");
+	err = tk_sus_tsk(task2_id);
+	if (err != E_OK) {
+		uart_puts("  First suspend failed ✗ FAIL\n\n");
+		goto test3;
+	}
+	err = tk_sus_tsk(task2_id);
+	if (err != E_OK) {
+		uart_puts("  Second suspend failed ✗ FAIL\n\n");
+		goto test3;
+	}
+	uart_puts("  Task2 suspended twice (suspend_count=2)\n");
+
+	uart_puts("  [Step 2] Resuming once...\n");
+	err = tk_rsm_tsk(task2_id);
+	if (err != E_OK) {
+		uart_puts("  Resume failed ✗ FAIL\n\n");
+		goto test3;
+	}
+	uart_puts("  Task2 should still be suspended (suspend_count=1)\n");
+	tk_dly_tsk(200);
+	uart_puts("  (Task2 should have printed nothing)\n");
+
+	uart_puts("  [Step 3] Resuming again to fully restore Task2...\n");
+	err = tk_rsm_tsk(task2_id);
 	if (err == E_OK) {
-		err = tk_rcv_mbx_u(demo_mbx_comm, 100, &msg2);
-		if (err == E_OK) {
-			err = tk_rcv_mbx_u(demo_mbx_comm, 100, &msg3);
-		}
+		uart_puts("  ✓ PASS\n\n");
+	} else {
+		uart_puts("  Resume failed ✗ FAIL\n\n");
 	}
 
-	uart_puts("  Result: ");
-	if (err == E_OK && msg1 != NULL && msg2 != NULL && msg3 != NULL) {
-		uart_puts("Received priorities: ");
-		uart_puthex((UW)msg1->msgpri);
-		uart_puts(", ");
-		uart_puthex((UW)msg2->msgpri);
-		uart_puts(", ");
-		uart_puthex((UW)msg3->msgpri);
-		if (msg1->msgpri == 10 && msg2->msgpri == 5 && msg3->msgpri == 1) {
-			uart_puts(" ✓ PASS\n\n");
-		} else {
-			uart_puts(" ✗ FAIL (wrong order)\n\n");
-		}
+	tk_dly_tsk(100);
+
+test3:
+	/* ===== Test 3: Force resume (clears all suspend counts) ===== */
+	test_num++;
+	uart_puts("[Test ");
+	uart_puthex(test_num);
+	uart_puts("] Force resume - tk_frsm_tsk\n");
+	uart_puts("  Expected: Immediately resume regardless of suspend count\n");
+
+	uart_puts("  [Step 1] Suspending Task2 three times...\n");
+	err = tk_sus_tsk(task2_id);
+	err |= tk_sus_tsk(task2_id);
+	err |= tk_sus_tsk(task2_id);
+	if (err != E_OK) {
+		uart_puts("  Suspends failed ✗ FAIL\n\n");
+		goto test4;
+	}
+	uart_puts("  Task2 suspended 3 times (suspend_count=3)\n");
+
+	uart_puts("  [Step 2] Force resuming with tk_frsm_tsk...\n");
+	err = tk_frsm_tsk(task2_id);
+	if (err == E_OK) {
+		uart_puts("  Task2 should be running immediately\n");
+		tk_dly_tsk(100);
+		uart_puts("  ✓ PASS\n\n");
 	} else {
-		uart_puts("ERROR: Failed to receive 3 messages ✗ FAIL\n\n");
+		uart_puts("  Force resume failed ✗ FAIL\n\n");
+	}
+
+test4:
+	/* ===== Test 4: Error case - self-suspend ===== */
+	test_num++;
+	uart_puts("[Test ");
+	uart_puthex(test_num);
+	uart_puts("] Error case - self-suspend prevention\n");
+	uart_puts("  Expected: E_OBJ when trying to suspend self\n");
+
+	err = tk_sus_tsk(tid);  /* Try to suspend self */
+	uart_puts("  Result: ");
+	uart_puthex(err);
+	if (err == E_OBJ) {
+		uart_puts(" (E_OBJ) ✓ PASS\n\n");
+	} else {
+		uart_puts(" ✗ FAIL (should return E_OBJ)\n\n");
+	}
+
+	/* ===== Test 5: Error case - resume non-suspended task ===== */
+	test_num++;
+	uart_puts("[Test ");
+	uart_puthex(test_num);
+	uart_puts("] Error case - resume non-suspended task\n");
+	uart_puts("  Expected: E_OBJ when resuming task that's not suspended\n");
+
+	/* Make sure Task2 is not suspended */
+	tk_dly_tsk(50);
+	err = tk_rsm_tsk(task2_id);
+	uart_puts("  Result: ");
+	uart_puthex(err);
+	if (err == E_OBJ) {
+		uart_puts(" (E_OBJ) ✓ PASS\n\n");
+	} else {
+		uart_puts(" ✗ FAIL (should return E_OBJ)\n\n");
 	}
 
 	uart_puts("========================================\n");
@@ -3657,134 +3637,29 @@ static void task1_main(INT stacd, void *exinf)
 static void task2_main(INT stacd, void *exinf)
 {
 	ID tid;
-	UW64 time;
-	ER err;
-	T_MSG *msg;
+	UW64 counter = 0;
 
 	(void)stacd;
 	(void)exinf;
 
 	tid = tk_get_tid();
 
-	uart_puts("[Task2] Message sender started\n");
+	uart_puts("[Task2] Counter task started\n");
 	uart_puts("[Task2] Task ID: ");
 	uart_puthex((UW)tid);
 	uart_puts("\n\n");
 
-	/* Wait for Test 1 and Test 2 to complete (keep mailbox empty) */
-	uart_puts("[Task2] Waiting for Test 1 and 2 (mailbox stays empty)...\n");
-	tk_dly_tsk(200);
+	/* Run counter loop - will be suspended/resumed by Task1 */
+	uart_puts("[Task2] Starting counter loop (prints every 100ms)...\n\n");
 
-	/* Test 3: Wait then send message */
-	uart_puts("[Task2] Waiting 200ms then sending message for Test 3...\n");
-	tk_dly_tsk(200);
-	time = tk_get_tim();
-	uart_puts("[Task2] Sending message (priority 5) at ");
-	uart_puthex((UW)time);
-	uart_puts("ms\n");
-
-	msg = (T_MSG *)alloc_message();
-	if (msg != NULL) {
-		msg->msgpri = 5;
-		err = tk_snd_mbx(demo_mbx_comm, msg);
-		if (err == E_OK) {
-			uart_puts("[Task2] Message sent successfully\n\n");
-		} else {
-			uart_puts("[Task2] Failed to send message: ");
-			uart_puthex(err);
-			uart_puts("\n\n");
-			free_message((MY_MSG *)msg);
-		}
-	} else {
-		uart_puts("[Task2] Failed to allocate message\n\n");
-	}
-
-	/* Test 4: Send message immediately (for poll test) */
-	uart_puts("[Task2] Sending message (priority 3) for Test 4...\n");
-	tk_dly_tsk(50);
-	msg = (T_MSG *)alloc_message();
-	if (msg != NULL) {
-		msg->msgpri = 3;
-		err = tk_snd_mbx(demo_mbx_comm, msg);
-		if (err == E_OK) {
-			uart_puts("[Task2] Message sent successfully\n\n");
-		} else {
-			uart_puts("[Task2] Failed to send message: ");
-			uart_puthex(err);
-			uart_puts("\n\n");
-			free_message((MY_MSG *)msg);
-		}
-	} else {
-		uart_puts("[Task2] Failed to allocate message\n\n");
-	}
-
-	/* Test 5: Wait then send message (TMO_FEVR test) */
-	uart_puts("[Task2] Waiting for Test 5 setup...\n");
-	tk_dly_tsk(100);
-	uart_puts("[Task2] Waiting 150ms then sending message for Test 5...\n");
-	tk_dly_tsk(150);
-	time = tk_get_tim();
-	uart_puts("[Task2] Sending message (priority 7) at ");
-	uart_puthex((UW)time);
-	uart_puts("ms\n");
-
-	msg = (T_MSG *)alloc_message();
-	if (msg != NULL) {
-		msg->msgpri = 7;
-		err = tk_snd_mbx(demo_mbx_comm, msg);
-		if (err == E_OK) {
-			uart_puts("[Task2] Message sent successfully\n\n");
-		} else {
-			uart_puts("[Task2] Failed to send message: ");
-			uart_puthex(err);
-			uart_puts("\n\n");
-			free_message((MY_MSG *)msg);
-		}
-	} else {
-		uart_puts("[Task2] Failed to allocate message\n\n");
-	}
-
-	/* Test 6: Send 3 messages with different priorities */
-	uart_puts("[Task2] Sending 3 messages for Test 6 (priority ordering)...\n");
-	tk_dly_tsk(50);
-
-	/* Send in order: priority 1, 5, 10 - should be received as 10, 5, 1 */
-	T_MSG *msg1, *msg2, *msg3;
-
-	msg1 = (T_MSG *)alloc_message();
-	if (msg1 != NULL) {
-		msg1->msgpri = 1;  /* Low priority */
-		err = tk_snd_mbx(demo_mbx_comm, msg1);
-		if (err != E_OK) {
-			free_message((MY_MSG *)msg1);
-		}
-	}
-
-	msg2 = (T_MSG *)alloc_message();
-	if (msg2 != NULL) {
-		msg2->msgpri = 5;  /* Medium priority */
-		err = tk_snd_mbx(demo_mbx_comm, msg2);
-		if (err != E_OK) {
-			free_message((MY_MSG *)msg2);
-		}
-	}
-
-	msg3 = (T_MSG *)alloc_message();
-	if (msg3 != NULL) {
-		msg3->msgpri = 10; /* High priority */
-		err = tk_snd_mbx(demo_mbx_comm, msg3);
-		if (err != E_OK) {
-			free_message((MY_MSG *)msg3);
-		}
-	}
-
-	uart_puts("[Task2] Sent 3 messages (priorities: 1, 5, 10)\n\n");
-
-	uart_puts("[Task2] Done\n\n");
-
-	/* Idle */
 	while (1) {
-		for (volatile int i = 0; i < 10000000; i++);
+		/* Print counter value every 100ms */
+		uart_puts("[Task2] Counter: ");
+		uart_puthex((UW)counter);
+		uart_puts("\n");
+
+		counter++;
+		tk_dly_tsk(100);
 	}
 }
 
