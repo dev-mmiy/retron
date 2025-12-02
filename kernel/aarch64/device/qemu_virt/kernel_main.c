@@ -2713,9 +2713,9 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* Signal Task2 to send another message */
-	uart_puts("[Task1] Signaling Task2 to send another message...\n\n");
-	tk_dly_tsk(50);
+	/* Wait for Task2 to send another message (Task2 waits 100ms, so we wait 120ms) */
+	uart_puts("[Task1] Waiting for Task2 to send another message...\n\n");
+	tk_dly_tsk(120);
 
 	/* ===== Test 5: Poll while message available (TMO_POL) ===== */
 	test_num++;
