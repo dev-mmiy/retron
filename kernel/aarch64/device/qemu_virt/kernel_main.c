@@ -3264,24 +3264,23 @@ static void task1_main(INT stacd, void *exinf)
 	tid = tk_get_tid();
 	uart_puts("\n");
 	uart_puts("========================================\n");
-	uart_puts("  Message Buffer Receive Timeout Test Suite\n");
+	uart_puts("  Task Sleep/Wakeup Timeout Test Suite\n");
 	uart_puts("========================================\n\n");
 
-	/* Buffer should be empty initially */
 	uart_puts("[Task1] Starting tests...\n");
-	uart_puts("[Task1] Buffer should be empty initially...\n\n");
-	tk_dly_tsk(50);  /* Small delay */
+	uart_puts("[Task1] Task ID: ");
+	uart_puthex((UW)tid);
+	uart_puts("\n\n");
+	tk_dly_tsk(50);  /* Small delay to ensure Task2 has started */
 
-	UW recv_msg[16];  /* 64 bytes */
-
-	/* ===== Test 1: Short timeout while buffer empty ===== */
+	/* ===== Test 1: Short timeout (50ms) while sleeping ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Short timeout (50ms) receive from empty buffer\n");
+	uart_puts("] Short timeout (50ms) sleep\n");
 	uart_puts("  Expected: E_TMOUT after ~50ms\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbf_u(demo_mbf, recv_msg, 50);
+	err = tk_slp_tsk_u(50);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -3290,10 +3289,8 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_TMOUT after ");
 		uart_puthex((UW)elapsed);
 		uart_puts("ms ✓ PASS\n\n");
-	} else if (err > 0) {
-		uart_puts("Received ");
-		uart_puthex((UW)err);
-		uart_puts(" bytes after ");
+	} else if (err == E_OK) {
+		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		uart_puts("ms ✗ FAIL (should timeout)\n\n");
 	} else {
@@ -3305,14 +3302,14 @@ static void task1_main(INT stacd, void *exinf)
 	/* Short delay between tests */
 	for (volatile int i = 0; i < 1000000; i++);
 
-	/* ===== Test 2: Poll while buffer empty (TMO_POL) ===== */
+	/* ===== Test 2: Poll (TMO_POL) with no pending wakeup ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) receive from empty buffer\n");
+	uart_puts("] Poll (TMO_POL) with no pending wakeup\n");
 	uart_puts("  Expected: E_TMOUT immediately\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbf_u(demo_mbf, recv_msg, TMO_POL);
+	err = tk_slp_tsk_u(TMO_POL);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -3321,10 +3318,8 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts("E_TMOUT after ");
 		uart_puthex((UW)elapsed);
 		uart_puts("ms ✓ PASS\n\n");
-	} else if (err > 0) {
-		uart_puts("Received ");
-		uart_puthex((UW)err);
-		uart_puts(" bytes after ");
+	} else if (err == E_OK) {
+		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		uart_puts("ms ✗ FAIL (should timeout)\n\n");
 	} else {
@@ -3333,57 +3328,56 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 3: Long timeout - Task2 will send message ===== */
-	uart_puts("[Task1] Waiting for Task2 to send message...\n\n");
-	tk_dly_tsk(200);  /* Delay 200ms to let Task2 send */
+	/* ===== Test 3: Wakeup before timeout ===== */
+	uart_puts("[Task1] Waiting for Task2 to wakeup in 200ms...\n\n");
+	tk_dly_tsk(50);  /* Give Task2 time to prepare */
 
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Long timeout (500ms) receive when message available\n");
-	uart_puts("  Expected: Receive 64 bytes immediately\n");
+	uart_puts("] Long timeout (500ms) sleep, wakeup by Task2\n");
+	uart_puts("  Expected: E_OK after ~200ms (when Task2 wakes us)\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbf_u(demo_mbf, recv_msg, 500);
+	err = tk_slp_tsk_u(500);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
 	uart_puts("  Result: ");
-	if (err == 64) {
-		uart_puts("Received 64 bytes after ");
+	if (err == E_OK) {
+		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
-		if (elapsed < 10) {
+		if (elapsed >= 150 && elapsed <= 250) {
 			uart_puts("ms ✓ PASS\n\n");
 		} else {
-			uart_puts("ms ⚠ WARNING (too slow)\n\n");
+			uart_puts("ms ⚠ WARNING (timing off)\n\n");
 		}
 	} else if (err == E_TMOUT) {
 		uart_puts("E_TMOUT after ");
 		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (should receive)\n\n");
-	} else if (err > 0) {
-		uart_puts("Received ");
-		uart_puthex((UW)err);
-		uart_puts(" bytes ✗ FAIL (expected 64 bytes)\n\n");
+		uart_puts("ms ✗ FAIL (should be woken up)\n\n");
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 4: Poll while buffer has message (TMO_POL) ===== */
+	/* ===== Test 4: Poll (TMO_POL) with pending wakeup ===== */
+	uart_puts("[Task1] Waiting for Task2 to queue wakeup...\n");
+	tk_dly_tsk(100);  /* Give Task2 time to call tk_wup_tsk */
+
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) receive when message available\n");
-	uart_puts("  Expected: Receive 32 bytes immediately\n");
+	uart_puts("] Poll (TMO_POL) with pending wakeup\n");
+	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbf_u(demo_mbf, recv_msg, TMO_POL);
+	err = tk_slp_tsk_u(TMO_POL);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
 	uart_puts("  Result: ");
-	if (err == 32) {
-		uart_puts("Received 32 bytes after ");
+	if (err == E_OK) {
+		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		if (elapsed < 5) {
 			uart_puts("ms ✓ PASS\n\n");
@@ -3393,63 +3387,61 @@ static void task1_main(INT stacd, void *exinf)
 	} else if (err == E_TMOUT) {
 		uart_puts("E_TMOUT after ");
 		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (should receive)\n\n");
-	} else if (err > 0) {
-		uart_puts("Received ");
-		uart_puthex((UW)err);
-		uart_puts(" bytes ✗ FAIL (expected 32 bytes)\n\n");
+		uart_puts("ms ✗ FAIL (wakeup was pending)\n\n");
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 5: Poll while buffer empty again (TMO_POL) ===== */
-	/* Buffer should be empty now after Test 3 and 4 */
+	/* ===== Test 5: Forever wait (TMO_FEVR) ===== */
+	uart_puts("[Task1] Waiting for Task2 to prepare...\n");
+	tk_dly_tsk(50);
+
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) receive from empty buffer again\n");
-	uart_puts("  Expected: E_TMOUT immediately\n");
+	uart_puts("] Forever wait (TMO_FEVR), wakeup by Task2\n");
+	uart_puts("  Expected: E_OK after ~150ms\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbf_u(demo_mbf, recv_msg, TMO_POL);
+	err = tk_slp_tsk_u(TMO_FEVR);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
 	uart_puts("  Result: ");
-	if (err == E_TMOUT) {
-		uart_puts("E_TMOUT after ");
+	if (err == E_OK) {
+		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
-		uart_puts("ms ✓ PASS\n\n");
-	} else if (err > 0) {
-		uart_puts("Received ");
-		uart_puthex((UW)err);
-		uart_puts(" bytes after ");
-		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (buffer should be empty)\n\n");
+		if (elapsed >= 100 && elapsed <= 200) {
+			uart_puts("ms ✓ PASS\n\n");
+		} else {
+			uart_puts("ms ⚠ WARNING (timing off)\n\n");
+		}
+	} else if (err == E_TMOUT) {
+		uart_puts("E_TMOUT ✗ FAIL (should never timeout with TMO_FEVR)\n\n");
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 6: Forever wait (TMO_FEVR) when message available ===== */
-	uart_puts("[Task1] Waiting for Task2 to send message...\n");
-	tk_dly_tsk(80);
+	/* ===== Test 6: Pre-wakeup (wakeup queued before sleep) ===== */
+	uart_puts("[Task1] Waiting for Task2 to pre-queue wakeup...\n");
+	tk_dly_tsk(100);
 
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Forever wait (TMO_FEVR) receive when message available\n");
-	uart_puts("  Expected: Receive 16 bytes immediately\n");
+	uart_puts("] Sleep after pre-wakeup (wakeup already queued)\n");
+	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_rcv_mbf_u(demo_mbf, recv_msg, TMO_FEVR);
+	err = tk_slp_tsk_u(500);  /* Should return immediately */
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
 	uart_puts("  Result: ");
-	if (err == 16) {
-		uart_puts("Received 16 bytes after ");
+	if (err == E_OK) {
+		uart_puts("E_OK after ");
 		uart_puthex((UW)elapsed);
 		if (elapsed < 5) {
 			uart_puts("ms ✓ PASS\n\n");
@@ -3457,13 +3449,7 @@ static void task1_main(INT stacd, void *exinf)
 			uart_puts("ms ⚠ WARNING (too slow)\n\n");
 		}
 	} else if (err == E_TMOUT) {
-		uart_puts("E_TMOUT after ");
-		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (should receive)\n\n");
-	} else if (err > 0) {
-		uart_puts("Received ");
-		uart_puthex((UW)err);
-		uart_puts(" bytes ✗ FAIL (expected 16 bytes)\n\n");
+		uart_puts("E_TMOUT ✗ FAIL (wakeup was queued)\n\n");
 	} else {
 		uart_puts("ERROR ");
 		uart_puthex(err);
@@ -3482,51 +3468,80 @@ static void task1_main(INT stacd, void *exinf)
 
 static void task2_main(INT stacd, void *exinf)
 {
-	ID tid;
+	ID tid, task1_tid = 1;  /* Task1 ID is 1 */
 	UW64 time;
 	ER err;
-	UW send_msg[16];  /* 64 bytes */
 
 	(void)stacd;
 	(void)exinf;
 
-	/* Get task ID using system call */
 	tid = tk_get_tid();
-	send_msg[0] = 0xCAFEBABE;
 
-	uart_puts("[Task2] Message sender started\n");
+	uart_puts("[Task2] Wakeup helper started\n");
+	uart_puts("[Task2] Task ID: ");
+	uart_puthex((UW)tid);
+	uart_puts("\n\n");
 
-	/* Keep buffer empty for Test 1 and Test 2 */
-	uart_puts("[Task2] Waiting for Task1 to test receive from empty buffer...\n\n");
-	tk_dly_tsk(200);  /* Wait for 200ms - Task1 will test timeouts */
+	/* Wait for Test 1 and Test 2 to complete (no wakeup needed) */
+	uart_puts("[Task2] Waiting for Test 1 and 2 (no action needed)...\n");
+	tk_dly_tsk(200);
 
-	/* Send first message for Test 3 (before Task1 tries to receive at ~300ms) */
+	/* Test 3: Wait then wake up Task1 */
+	uart_puts("[Task2] Waiting 200ms then waking up Task1 for Test 3...\n");
+	tk_dly_tsk(200);
 	time = tk_get_tim();
-	uart_puts("[Task2] Sending 64-byte message at ");
+	uart_puts("[Task2] Waking up Task1 at ");
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
-	err = tk_snd_mbf(demo_mbf, send_msg, 64);
+	err = tk_wup_tsk(task1_tid);
 	if (err == E_OK) {
-		uart_puts("[Task2] Sent 64-byte message\n\n");
+		uart_puts("[Task2] Task1 woken up successfully\n\n");
+	} else {
+		uart_puts("[Task2] Failed to wake up Task1: ");
+		uart_puthex(err);
+		uart_puts("\n\n");
 	}
 
-	/* Send second message for Test 4 (immediately after) */
-	err = tk_snd_mbf(demo_mbf, send_msg, 32);
+	/* Test 4: Queue a wakeup request (Task1 is not sleeping yet) */
+	uart_puts("[Task2] Queueing wakeup for Test 4...\n");
+	tk_dly_tsk(50);
+	err = tk_wup_tsk(task1_tid);
 	if (err == E_OK) {
-		uart_puts("[Task2] Sent 32-byte message\n\n");
+		uart_puts("[Task2] Wakeup queued for Task1\n\n");
+	} else {
+		uart_puts("[Task2] Failed to queue wakeup: ");
+		uart_puthex(err);
+		uart_puts("\n\n");
 	}
 
-	/* Wait for Test 3, 4, and 5 to complete */
+	/* Test 5: Wait then wake up Task1 (TMO_FEVR test) */
+	uart_puts("[Task2] Waiting for Test 5 setup...\n");
+	tk_dly_tsk(100);
+	uart_puts("[Task2] Waiting 150ms then waking up Task1 for Test 5...\n");
 	tk_dly_tsk(150);
-
-	/* Send third message for Test 6 (before Task1 tries to receive at ~380ms) */
 	time = tk_get_tim();
-	uart_puts("[Task2] Sending 16-byte message at ");
+	uart_puts("[Task2] Waking up Task1 at ");
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
-	err = tk_snd_mbf(demo_mbf, send_msg, 16);
+	err = tk_wup_tsk(task1_tid);
 	if (err == E_OK) {
-		uart_puts("[Task2] Sent 16-byte message\n");
+		uart_puts("[Task2] Task1 woken up successfully\n\n");
+	} else {
+		uart_puts("[Task2] Failed to wake up Task1: ");
+		uart_puthex(err);
+		uart_puts("\n\n");
+	}
+
+	/* Test 6: Pre-queue a wakeup before Task1 sleeps */
+	uart_puts("[Task2] Pre-queueing wakeup for Test 6...\n");
+	tk_dly_tsk(50);
+	err = tk_wup_tsk(task1_tid);
+	if (err == E_OK) {
+		uart_puts("[Task2] Wakeup pre-queued for Task1\n\n");
+	} else {
+		uart_puts("[Task2] Failed to pre-queue wakeup: ");
+		uart_puthex(err);
+		uart_puts("\n\n");
 	}
 
 	uart_puts("[Task2] Done\n\n");
