@@ -482,6 +482,7 @@ static void schedule(void)
 #define SVC_LOC_MTX_U		22	/* Lock mutex with timeout */
 #define SVC_RCV_MBX_U		23	/* Receive mailbox with timeout */
 #define SVC_WAI_FLG_U		24	/* Wait event flag with timeout */
+#define SVC_SND_MBF_U		25	/* Send message buffer with timeout */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -1603,6 +1604,151 @@ static ER svc_snd_mbf(SVC_REGS *regs)
 }
 
 /*
+ * System call: Send message to buffer with timeout
+ * Arguments: x0 = mbfid, x1 = msg buffer pointer, x2 = message size, x3 = timeout
+ * Returns: E_OK, E_TMOUT, or error in x0
+ */
+static ER svc_snd_mbf_u(SVC_REGS *regs)
+{
+	ID mbfid = (ID)regs->x0;
+	UW *msg = (UW *)regs->x1;
+	UW msgsz = (UW)regs->x2;
+	TMO tmo = (TMO)regs->x3;
+	MBFCB *mbf = NULL;
+	TCB *current;
+	TCB *recv_task;
+	TCB **queue_ptr;
+	INT i;
+	UW msg_total_sz;
+	UW byte_idx;
+	unsigned char *src_bytes;
+	unsigned char *dst_bytes;
+
+	/* Find message buffer */
+	for (i = 0; i < MAX_MSGBUFFERS; i++) {
+		if (msgbuffer_table[i].mbfid == mbfid) {
+			mbf = &msgbuffer_table[i];
+			break;
+		}
+	}
+
+	if (mbf == NULL || msgsz == 0 || msgsz > mbf->maxmsz) {
+		regs->x0 = E_NOEXS;
+		return E_NOEXS;
+	}
+
+	/* Message format: [2-byte size][data] */
+	msg_total_sz = 2 + msgsz;
+
+	/* Check if there's a task waiting to receive */
+	if (mbf->recv_queue != NULL) {
+		/* Direct transfer to waiting task */
+		recv_task = mbf->recv_queue;
+		mbf->recv_queue = recv_task->wait_next;
+
+		/* Copy message to receiver's buffer (stored in wait_obj as UW*) */
+		UW *recv_buf = (UW *)recv_task->wait_obj;
+		src_bytes = (unsigned char *)msg;
+		dst_bytes = (unsigned char *)recv_buf;
+		for (byte_idx = 0; byte_idx < msgsz; byte_idx++) {
+			dst_bytes[byte_idx] = src_bytes[byte_idx];
+		}
+
+		/* Set message size in receiver's return value (x0) via saved register context */
+		if (recv_task->wait_regs != NULL) {
+			SVC_REGS *recv_regs = (SVC_REGS *)recv_task->wait_regs;
+			recv_regs->x0 = msgsz;
+		}
+
+		/* Clear timeout since receiver is being woken up successfully */
+		recv_task->wait_timeout = 0;
+
+		/* Wake up receiver */
+		recv_task->state = TS_READY;
+		recv_task->wait_next = NULL;
+		recv_task->wait_obj = NULL;
+		recv_task->wait_regs = NULL;
+
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* Handle polling case (TMO_POL = 0) */
+	if (tmo == TMO_POL) {
+		/* Check if there's enough space in buffer */
+		if (mbf->freesz < msg_total_sz) {
+			/* Buffer full, return timeout immediately */
+			regs->x0 = E_TMOUT;
+			return E_TMOUT;
+		}
+		/* Space available, fall through to write message */
+	} else {
+		/* Check if there's enough space in buffer */
+		if (mbf->freesz < msg_total_sz) {
+			/* Buffer full, add sender to wait queue with timeout */
+			current = (TCB *)ctxtsk;
+			if (current == NULL) {
+				regs->x0 = E_SYS;
+				return E_SYS;
+			}
+
+			/* Store message info in TCB for later */
+			current->state = TS_WAIT;
+			current->wait_next = NULL;
+			current->wait_obj = (void *)msg;  /* Store message pointer */
+			current->wait_flgptn = msgsz;     /* Store message size */
+			current->wait_regs = regs;        /* Save register context for timeout handling */
+
+			/* Set timeout: calculate absolute timeout time */
+			if (tmo == TMO_FEVR) {
+				current->wait_timeout = 0;  /* 0 means no timeout */
+			} else {
+				current->wait_timeout = timer_tick_count + tmo;
+			}
+
+			/* Add to end of send queue */
+			if (mbf->send_queue == NULL) {
+				mbf->send_queue = current;
+			} else {
+				queue_ptr = &mbf->send_queue;
+				while (*queue_ptr != NULL && (*queue_ptr)->wait_next != NULL) {
+					queue_ptr = &((*queue_ptr)->wait_next);
+				}
+				(*queue_ptr)->wait_next = current;
+			}
+
+			/* Schedule next task since current task is now waiting */
+			schedule();
+
+			/* Task will be woken up by rcv_mbf (E_OK) or timeout (E_TMOUT) */
+			/* Note: The return value is set by either rcv_mbf or check_timeouts */
+			regs->x0 = E_OK;
+			return E_OK;
+		}
+		/* Space available, fall through to write message */
+	}
+
+	/* Write message to buffer */
+	dst_bytes = (unsigned char *)mbf->buffer;
+	src_bytes = (unsigned char *)msg;
+
+	/* Write size (2 bytes) */
+	dst_bytes[(mbf->tail) % mbf->bufsz] = (unsigned char)(msgsz & 0xFF);
+	dst_bytes[(mbf->tail + 1) % mbf->bufsz] = (unsigned char)((msgsz >> 8) & 0xFF);
+
+	/* Write data */
+	for (byte_idx = 0; byte_idx < msgsz; byte_idx++) {
+		dst_bytes[(mbf->tail + 2 + byte_idx) % mbf->bufsz] = src_bytes[byte_idx];
+	}
+
+	mbf->tail = (mbf->tail + msg_total_sz) % mbf->bufsz;
+	mbf->freesz -= msg_total_sz;
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
  * System call: Receive message from buffer
  * Arguments: x0 = mbfid, x1 = msg buffer pointer
  * Returns: message size in x0 (or error)
@@ -1711,11 +1857,20 @@ static ER svc_rcv_mbf(SVC_REGS *regs)
 			mbf->tail = (mbf->tail + send_total_sz) % mbf->bufsz;
 			mbf->freesz -= send_total_sz;
 
+			/* Set return value to E_OK if sender has saved register context (timeout variant) */
+			if (send_task->wait_regs != NULL) {
+				((SVC_REGS *)send_task->wait_regs)->x0 = E_OK;
+			}
+
+			/* Clear timeout since sender is being woken up successfully */
+			send_task->wait_timeout = 0;
+
 			/* Wake up sender */
 			send_task->state = TS_READY;
 			send_task->wait_next = NULL;
 			send_task->wait_obj = NULL;
 			send_task->wait_flgptn = 0;
+			send_task->wait_regs = NULL;
 		} else {
 			/* Still not enough space, put back in queue */
 			send_task->wait_next = mbf->send_queue;
@@ -2153,6 +2308,9 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 	case SVC_WAI_FLG_U:
 		svc_wai_flg_u(regs);
 		break;
+	case SVC_SND_MBF_U:
+		svc_snd_mbf_u(regs);
+		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
 		uart_puthex((UW)svc_num);
@@ -2495,6 +2653,22 @@ static inline ER tk_snd_mbf(ID mbfid, void *msg, UW msgsz)
 	return (ER)ret;
 }
 
+/* Send message to buffer with timeout */
+static inline ER tk_snd_mbf_u(ID mbfid, void *msg, UW msgsz, TMO tmo)
+{
+	register UW64 r0 __asm__("x0") = mbfid;
+	register UW64 r1 __asm__("x1") = (UW64)msg;
+	register UW64 r2 __asm__("x2") = msgsz;
+	register UW64 r3 __asm__("x3") = tmo;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_SND_MBF_U), "r"(r1), "r"(r2), "r"(r3)
+		: "memory"
+	);
+	return (ER)r0;
+}
+
 /* Receive message from buffer */
 static inline INT tk_rcv_mbf(ID mbfid, void *msg)
 {
@@ -2735,21 +2909,25 @@ static void task1_main(INT stacd, void *exinf)
 	tid = tk_get_tid();
 	uart_puts("\n");
 	uart_puts("========================================\n");
-	uart_puts("  Event Flag Timeout Test Suite\n");
+	uart_puts("  Message Buffer Send Timeout Test Suite\n");
 	uart_puts("========================================\n\n");
 
-	/* Wait for task2 to start (event flag initially 0x00) */
-	uart_puts("[Task1] Starting tests (event flag pattern 0x00)...\n\n");
-	tk_dly_tsk(50);  /* Delay 50ms to let Task2 start */
+	/* Wait for task2 to start and fill buffer */
+	uart_puts("[Task1] Starting tests...\n");
+	uart_puts("[Task1] Waiting for Task2 to fill buffer...\n\n");
+	tk_dly_tsk(100);  /* Delay 100ms to let Task2 fill buffer */
 
-	/* ===== Test 1: Short timeout waiting for bit 0x01 (not set) ===== */
+	UW test_msg[16];  /* 64 bytes */
+	test_msg[0] = 0xDEADBEEF;
+
+	/* ===== Test 1: Short timeout while buffer full ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Short timeout (50ms) wait for bit 0x01 (not set)\n");
+	uart_puts("] Short timeout (50ms) send to full buffer\n");
 	uart_puts("  Expected: E_TMOUT after ~50ms\n");
 	time_start = tk_get_tim();
-	err = tk_wai_flg_u(demo_flg, 0x01, TWF_ORW, 50);
+	err = tk_snd_mbf_u(demo_mbf, test_msg, 64, 50);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2771,14 +2949,14 @@ static void task1_main(INT stacd, void *exinf)
 	/* Short delay between tests */
 	for (volatile int i = 0; i < 1000000; i++);
 
-	/* ===== Test 2: Poll for bit 0x02 not set (TMO_POL) ===== */
+	/* ===== Test 2: Poll while buffer full (TMO_POL) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) wait for bit 0x02 (not set)\n");
+	uart_puts("] Poll (TMO_POL) send to full buffer\n");
 	uart_puts("  Expected: E_TMOUT immediately\n");
 	time_start = tk_get_tim();
-	err = tk_wai_flg_u(demo_flg, 0x02, TWF_ORW, TMO_POL);
+	err = tk_snd_mbf_u(demo_mbf, test_msg, 64, TMO_POL);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2797,17 +2975,17 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 3: Wait for bit 0x04 - Task2 will set it ===== */
-	uart_puts("[Task1] Waiting for Task2 to set bit 0x04...\n\n");
-	tk_dly_tsk(100);  /* Delay 100ms to let Task2 set flag */
+	/* ===== Test 3: Long timeout - Task2 will free space ===== */
+	uart_puts("[Task1] Waiting for Task2 to receive and free space...\n\n");
+	tk_dly_tsk(120);  /* Delay 120ms to let Task2 receive */
 
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Long timeout (500ms) wait for bit 0x04 (should be set)\n");
+	uart_puts("] Long timeout (500ms) send when space available\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_wai_flg_u(demo_flg, 0x04, TWF_ORW, 500);
+	err = tk_snd_mbf_u(demo_mbf, test_msg, 16, 500);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2830,44 +3008,14 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 4: Poll for bit 0x08 not set (TMO_POL) ===== */
+	/* ===== Test 4: Poll while buffer has space (TMO_POL) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) wait for bit 0x08 (not set)\n");
-	uart_puts("  Expected: E_TMOUT immediately\n");
-	time_start = tk_get_tim();
-	err = tk_wai_flg_u(demo_flg, 0x08, TWF_ORW, TMO_POL);
-	time_end = tk_get_tim();
-	elapsed = time_end - time_start;
-
-	uart_puts("  Result: ");
-	if (err == E_TMOUT) {
-		uart_puts("E_TMOUT after ");
-		uart_puthex((UW)elapsed);
-		uart_puts("ms ✓ PASS\n\n");
-	} else if (err == E_OK) {
-		uart_puts("E_OK after ");
-		uart_puthex((UW)elapsed);
-		uart_puts("ms ✗ FAIL (flag should not be set)\n\n");
-	} else {
-		uart_puts("ERROR ");
-		uart_puthex(err);
-		uart_puts(" ✗ FAIL\n\n");
-	}
-
-	/* Wait for Task2 to set another flag (Task2 waits 100ms, so we wait 120ms) */
-	uart_puts("[Task1] Waiting for Task2 to set bit 0x10...\n\n");
-	tk_dly_tsk(120);
-
-	/* ===== Test 5: Poll for bit 0x10 that is set (TMO_POL) ===== */
-	test_num++;
-	uart_puts("[Test ");
-	uart_puthex(test_num);
-	uart_puts("] Poll (TMO_POL) wait for bit 0x10 (should be set)\n");
+	uart_puts("] Poll (TMO_POL) send when space available\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_wai_flg_u(demo_flg, 0x10, TWF_ORW, TMO_POL);
+	err = tk_snd_mbf_u(demo_mbf, test_msg, 32, TMO_POL);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2890,17 +3038,44 @@ static void task1_main(INT stacd, void *exinf)
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-	/* ===== Test 6: Forever wait (TMO_FEVR) when bit 0x20 is available ===== */
-	uart_puts("[Task1] Waiting for Task2 to set bit 0x20...\n");
-	tk_dly_tsk(50);
+	/* ===== Test 5: Poll while buffer full again (TMO_POL) ===== */
+	/* Buffer should be full now after Test 3 and 4 */
+	test_num++;
+	uart_puts("[Test ");
+	uart_puthex(test_num);
+	uart_puts("] Poll (TMO_POL) send to full buffer again\n");
+	uart_puts("  Expected: E_TMOUT immediately\n");
+	time_start = tk_get_tim();
+	err = tk_snd_mbf_u(demo_mbf, test_msg, 64, TMO_POL);
+	time_end = tk_get_tim();
+	elapsed = time_end - time_start;
+
+	uart_puts("  Result: ");
+	if (err == E_TMOUT) {
+		uart_puts("E_TMOUT after ");
+		uart_puthex((UW)elapsed);
+		uart_puts("ms ✓ PASS\n\n");
+	} else if (err == E_OK) {
+		uart_puts("E_OK after ");
+		uart_puthex((UW)elapsed);
+		uart_puts("ms ✗ FAIL (buffer should be full)\n\n");
+	} else {
+		uart_puts("ERROR ");
+		uart_puthex(err);
+		uart_puts(" ✗ FAIL\n\n");
+	}
+
+	/* ===== Test 6: Forever wait (TMO_FEVR) when space available ===== */
+	uart_puts("[Task1] Waiting for Task2 to receive and free space...\n");
+	tk_dly_tsk(120);
 
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Forever wait (TMO_FEVR) for bit 0x20 (should be set)\n");
+	uart_puts("] Forever wait (TMO_FEVR) send when space available\n");
 	uart_puts("  Expected: E_OK immediately\n");
 	time_start = tk_get_tim();
-	err = tk_wai_flg_u(demo_flg, 0x20, TWF_ORW, TMO_FEVR);
+	err = tk_snd_mbf_u(demo_mbf, test_msg, 64, TMO_FEVR);
 	time_end = tk_get_tim();
 	elapsed = time_end - time_start;
 
@@ -2938,49 +3113,63 @@ static void task2_main(INT stacd, void *exinf)
 	ID tid;
 	UW64 time;
 	ER err;
+	UW fill_msg[16];  /* 64 bytes */
+	UW recv_msg[16];  /* 64 bytes */
+	INT msgsz;
 
 	(void)stacd;
 	(void)exinf;
 
 	/* Get task ID using system call */
 	tid = tk_get_tid();
+	fill_msg[0] = 0xCAFEBABE;
 
-	uart_puts("[Task2] Event flag setter started\n");
+	uart_puts("[Task2] Buffer manager started\n");
 
-	/* Keep flag at 0x00 initially for Test 1 and Test 2 */
-	uart_puts("[Task2] Waiting (flag=0x00 for Task1's Test 1 and Test 2)...\n\n");
+	/* Fill buffer initially for Test 1 and Test 2 - buffer is 128 bytes */
+	uart_puts("[Task2] Filling buffer (128 bytes total, 64+60 bytes)...\n");
+
+	/* Send 64 bytes */
+	err = tk_snd_mbf(demo_mbf, fill_msg, 64);
+	if (err == E_OK) {
+		uart_puts("[Task2] Sent first 64-byte message\n");
+	}
+
+	/* Send 60 bytes to fill buffer exactly (66 + 62 = 128) */
+	err = tk_snd_mbf(demo_mbf, fill_msg, 60);
+	if (err == E_OK) {
+		uart_puts("[Task2] Sent second 60-byte message (buffer full)\n\n");
+	}
+
+	/* Keep buffer full for Test 1 and Test 2 */
 	tk_dly_tsk(300);  /* Wait for 300ms - Task1 will test timeouts */
 
-	/* Set bit 0x04 for Test 3 */
+	/* Receive one message to free space for Test 3 */
 	time = tk_get_tim();
-	uart_puts("[Task2] Setting bit 0x04 at ");
+	uart_puts("[Task2] Receiving message to free space at ");
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
-	err = tk_set_flg(demo_flg, 0x04);
-	if (err == E_OK) {
-		uart_puts("[Task2] Bit 0x04 set successfully\n\n");
+	msgsz = tk_rcv_mbf(demo_mbf, recv_msg);
+	if (msgsz > 0) {
+		uart_puts("[Task2] Received ");
+		uart_puthex((UW)msgsz);
+		uart_puts(" bytes (space freed)\n\n");
 	}
 
-	/* Wait for Task1 Test 4, then set bit 0x10 for Test 5 */
+	/* Wait for Test 4 to complete, buffer should be full again after Test 3 and 4 */
+	tk_dly_tsk(50);
+
+	/* Receive message to free space for Test 6 */
 	tk_dly_tsk(100);
 	time = tk_get_tim();
-	uart_puts("[Task2] Setting bit 0x10 at ");
+	uart_puts("[Task2] Receiving message to free space at ");
 	uart_puthex((UW)time);
 	uart_puts("ms\n");
-	err = tk_set_flg(demo_flg, 0x10);
-	if (err == E_OK) {
-		uart_puts("[Task2] Bit 0x10 set successfully\n\n");
-	}
-
-	/* Set bit 0x20 for Test 6 */
-	tk_dly_tsk(50);
-	time = tk_get_tim();
-	uart_puts("[Task2] Setting bit 0x20 at ");
-	uart_puthex((UW)time);
-	uart_puts("ms\n");
-	err = tk_set_flg(demo_flg, 0x20);
-	if (err == E_OK) {
-		uart_puts("[Task2] Bit 0x20 set successfully\n");
+	msgsz = tk_rcv_mbf(demo_mbf, recv_msg);
+	if (msgsz > 0) {
+		uart_puts("[Task2] Received ");
+		uart_puthex((UW)msgsz);
+		uart_puts(" bytes (space freed)\n");
 	}
 
 	uart_puts("[Task2] Done\n\n");
@@ -3251,6 +3440,7 @@ static void check_timeouts(void)
 	MTXCB *mtx;
 	MBXCB *mbx;
 	FLGCB *flg;
+	MBFCB *mbf;
 	void *obj_start, *obj_end;
 
 	/* Check all tasks for timeout */
@@ -3356,8 +3546,36 @@ static void check_timeouts(void)
 										queue_ptr = &((*queue_ptr)->wait_next);
 									}
 								}
+							} else {
+								/* Could be a message buffer send wait. For message buffer,
+								 * wait_obj contains the message pointer, not the MBFCB.
+								 * So we search all message buffers for this task. */
+								INT j;
+								int found = 0;
+								for (j = 0; j < MAX_MSGBUFFERS; j++) {
+									mbf = &msgbuffer_table[j];
+									if (mbf->mbfid == 0) continue;
+
+									/* Check if task is in this buffer's send queue */
+									if (mbf->send_queue == task) {
+										mbf->send_queue = task->wait_next;
+										found = 1;
+										break;
+									} else {
+										TCB *prev = mbf->send_queue;
+										while (prev != NULL && prev->wait_next != NULL) {
+											if (prev->wait_next == task) {
+												prev->wait_next = task->wait_next;
+												found = 1;
+												break;
+											}
+											prev = prev->wait_next;
+										}
+										if (found) break;
+									}
+								}
+								/* If not semaphore, mutex, mailbox, event flag, or message buffer, could be other objects - add handling as needed */
 							}
-							/* If not semaphore, mutex, mailbox, or event flag, could be other objects - add handling as needed */
 						}
 					}
 				}
