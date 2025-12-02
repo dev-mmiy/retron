@@ -91,6 +91,9 @@ typedef struct tcb {
 
 	/* Timeout information */
 	SYSTIM		wait_timeout;	/* Timeout absolute time (0 = no timeout) */
+
+	/* Task sleep/wakeup information */
+	INT		wakeup_count;	/* Pending wakeup count */
 } TCB;
 
 /*
@@ -396,6 +399,9 @@ static ER create_task(INT idx, ID tskid, TASK_FP task, void *stack, INT stksz)
 	tcb->wait_obj = NULL;
 	tcb->wait_flgptn = 0;
 	tcb->wait_mode = 0;
+	tcb->wait_timeout = 0;
+	tcb->wait_regs = NULL;
+	tcb->wakeup_count = 0;
 
 	setup_task_context(tcb, task, stack, stksz);
 
@@ -484,6 +490,8 @@ static void schedule(void)
 #define SVC_WAI_FLG_U		24	/* Wait event flag with timeout */
 #define SVC_SND_MBF_U		25	/* Send message buffer with timeout */
 #define SVC_RCV_MBF_U		26	/* Receive message buffer with timeout */
+#define SVC_SLP_TSK_U		27	/* Sleep task with timeout */
+#define SVC_WUP_TSK		28	/* Wakeup task */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -2072,6 +2080,114 @@ static ER svc_rcv_mbf_u(SVC_REGS *regs)
 }
 
 /*
+ * System call: Sleep task with timeout
+ * Parameters: x0 = tmo (timeout)
+ * Returns: E_OK or error in x0
+ */
+static ER svc_slp_tsk_u(SVC_REGS *regs)
+{
+	TMO tmo = (TMO)regs->x0;
+	TCB *current;
+
+	current = (TCB *)ctxtsk;
+	if (current == NULL) {
+		regs->x0 = E_SYS;
+		return E_SYS;
+	}
+
+	/* Handle polling case (TMO_POL = 0) */
+	if (tmo == TMO_POL) {
+		if (current->wakeup_count > 0) {
+			/* Wakeup request is pending */
+			current->wakeup_count--;
+			regs->x0 = E_OK;
+			return E_OK;
+		} else {
+			/* No wakeup pending */
+			regs->x0 = E_TMOUT;
+			return E_TMOUT;
+		}
+	}
+
+	/* Check if there's already a pending wakeup */
+	if (current->wakeup_count > 0) {
+		current->wakeup_count--;
+		regs->x0 = E_OK;
+		return E_OK;
+	}
+
+	/* Put task to sleep */
+	current->state = TS_WAIT;
+	current->wait_obj = NULL;  /* NULL means not waiting on any object */
+	current->wait_flgptn = 1;  /* Flag to indicate sleep (not delay) */
+	current->wait_regs = regs;
+
+	/* Set timeout */
+	if (tmo == TMO_FEVR) {
+		current->wait_timeout = 0;  /* 0 means no timeout */
+	} else {
+		current->wait_timeout = timer_tick_count + tmo;
+	}
+
+	schedule();
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: Wakeup task
+ * Parameters: x0 = tskid (task ID)
+ * Returns: E_OK or error in x0
+ */
+static ER svc_wup_tsk(SVC_REGS *regs)
+{
+	ID tskid = (ID)regs->x0;
+	TCB *target_task = NULL;
+	INT i;
+
+	/* Find target task */
+	for (i = 0; i < MAX_TASKS; i++) {
+		if (task_table[i].tskid == tskid) {
+			target_task = &task_table[i];
+			break;
+		}
+	}
+
+	if (target_task == NULL) {
+		regs->x0 = E_NOEXS;
+		return E_NOEXS;
+	}
+
+	/* Check task state */
+	if (target_task->state == TS_WAIT && target_task->wait_obj == NULL) {
+		/* Task is sleeping, wake it up */
+		target_task->state = TS_READY;
+
+		/* Set return value to E_OK if task has saved register context */
+		if (target_task->wait_regs != NULL) {
+			((SVC_REGS *)target_task->wait_regs)->x0 = E_OK;
+		}
+
+		/* Clear timeout since task is being woken up */
+		target_task->wait_timeout = 0;
+		target_task->wait_regs = NULL;
+
+		regs->x0 = E_OK;
+		return E_OK;
+	} else if (target_task->state == TS_READY || target_task->state == TS_RUN) {
+		/* Task is not sleeping, queue the wakeup request */
+		target_task->wakeup_count++;
+		regs->x0 = E_OK;
+		return E_OK;
+	} else {
+		/* Task is waiting on something else (not sleeping) */
+		regs->x0 = E_OBJ;  /* Object state error */
+		return E_OBJ;
+	}
+}
+
+/*
  * System call: Create mailbox
  * Returns: mailbox ID in x0 (or error)
  */
@@ -2503,6 +2619,12 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 	case SVC_RCV_MBF_U:
 		svc_rcv_mbf_u(regs);
 		break;
+	case SVC_SLP_TSK_U:
+		svc_slp_tsk_u(regs);
+		break;
+	case SVC_WUP_TSK:
+		svc_wup_tsk(regs);
+		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
 		uart_puthex((UW)svc_num);
@@ -2874,6 +2996,32 @@ static inline INT tk_rcv_mbf_u(ID mbfid, void *msg, TMO tmo)
 		: "memory"
 	);
 	return (INT)r0;
+}
+
+/* Sleep task with timeout */
+static inline ER tk_slp_tsk_u(TMO tmo)
+{
+	register UW64 r0 __asm__("x0") = tmo;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_SLP_TSK_U)
+		: "memory"
+	);
+	return (ER)r0;
+}
+
+/* Wakeup task */
+static inline ER tk_wup_tsk(ID tskid)
+{
+	register UW64 r0 __asm__("x0") = tskid;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_WUP_TSK)
+		: "memory"
+	);
+	return (ER)r0;
 }
 
 /* Receive message from buffer */
@@ -3812,10 +3960,17 @@ static void check_timeouts(void)
 					((SVC_REGS *)task->wait_regs)->x0 = E_TMOUT;
 				}
 			} else {
-				/* Task delay (tk_dly_tsk) - timeout is normal completion */
-				/* Set return value to E_OK (successful delay) */
-				if (task->wait_regs != NULL) {
-					((SVC_REGS *)task->wait_regs)->x0 = E_OK;
+				/* wait_obj is NULL - either task delay or task sleep */
+				if (task->wait_flgptn == 1) {
+					/* Task sleep (tk_slp_tsk_u) - timeout is an error */
+					if (task->wait_regs != NULL) {
+						((SVC_REGS *)task->wait_regs)->x0 = E_TMOUT;
+					}
+				} else {
+					/* Task delay (tk_dly_tsk) - timeout is normal completion */
+					if (task->wait_regs != NULL) {
+						((SVC_REGS *)task->wait_regs)->x0 = E_OK;
+					}
 				}
 			}
 
@@ -3824,6 +3979,7 @@ static void check_timeouts(void)
 			task->wait_timeout = 0;
 			task->wait_obj = NULL;
 			task->wait_next = NULL;
+			task->wait_flgptn = 0;
 			task->wait_regs = NULL;
 
 			/* Task may now be runnable - scheduler will handle it */
