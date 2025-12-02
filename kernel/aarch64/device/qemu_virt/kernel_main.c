@@ -1653,11 +1653,28 @@ static ER svc_snd_mbx(SVC_REGS *regs)
 		recv_task = mbx->recv_queue;
 		mbx->recv_queue = recv_task->wait_next;
 
-		/* Set message pointer in receiver's return value (x0) via saved register context */
+		/* Set message pointer in receiver's return value via saved register context */
 		if (recv_task->wait_regs != NULL) {
 			SVC_REGS *recv_regs = (SVC_REGS *)recv_task->wait_regs;
-			recv_regs->x0 = (UW64)msg;
+
+			/* Check if this is svc_rcv_mbx_u (has ppk_msg parameter in x2) */
+			/* For svc_rcv_mbx_u: x0=mbxid, x1=tmo, x2=ppk_msg */
+			/* For svc_rcv_mbx: x0=mbxid, x1/x2 undefined */
+			/* We detect _u variant by checking if x2 looks like a valid stack pointer */
+			T_MSG **ppk_msg = (T_MSG **)recv_regs->x2;
+
+			if (ppk_msg != NULL && (UW64)ppk_msg >= 0x40000000 && (UW64)ppk_msg < 0x80000000) {
+				/* This is svc_rcv_mbx_u - return via output parameter */
+				*ppk_msg = msg;
+				recv_regs->x0 = E_OK;
+			} else {
+				/* This is svc_rcv_mbx - return message pointer in x0 */
+				recv_regs->x0 = (UW64)msg;
+			}
 		}
+
+		/* Clear timeout since task is being woken up successfully */
+		recv_task->wait_timeout = 0;
 
 		/* Wake up receiver */
 		recv_task->state = TS_READY;
