@@ -473,7 +473,6 @@ static void schedule(void)
 #define SVC_GET_TID		1	/* Get current task ID */
 #define SVC_DLY_TSK		2	/* Task delay */
 #define SVC_GET_TIM		3	/* Get system time */
-#define SVC_EXT_TSK		4	/* Exit task */
 #define SVC_CRE_SEM		5	/* Create semaphore */
 #define SVC_SIG_SEM		6	/* Signal semaphore */
 #define SVC_WAI_SEM		7	/* Wait semaphore */
@@ -501,6 +500,8 @@ static void schedule(void)
 #define SVC_SUS_TSK		29	/* Suspend task */
 #define SVC_RSM_TSK		30	/* Resume task */
 #define SVC_FRSM_TSK		31	/* Force resume task */
+#define SVC_EXT_TSK		32	/* Exit task (self termination) */
+#define SVC_TER_TSK		33	/* Terminate task */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -584,17 +585,6 @@ static ER svc_dly_tsk(SVC_REGS *regs)
 static ER svc_get_tim(SVC_REGS *regs)
 {
 	regs->x0 = timer_tick_count;
-	return E_OK;
-}
-
-/*
- * System call: Exit task (placeholder)
- */
-static ER svc_ext_tsk(SVC_REGS *regs)
-{
-	uart_puts("[SVC] Task exit requested\n");
-	/* For now, just put task in infinite loop */
-	regs->x0 = E_OK;
 	return E_OK;
 }
 
@@ -2346,6 +2336,361 @@ static ER svc_frsm_tsk(SVC_REGS *regs)
 }
 
 /*
+ * System call: tk_ext_tsk - Exit task (self termination)
+ * No arguments
+ * No return value (does not return to caller)
+ */
+static void svc_ext_tsk(SVC_REGS *regs)
+{
+	TCB *current = (TCB *)ctxtsk;
+	INT i;
+
+	(void)regs;  /* Unused */
+
+	if (current == NULL) {
+		return;  /* Should not happen */
+	}
+
+	/* Change state to DORMANT */
+	current->state = TS_DORMANT;
+
+	/* Reset suspend count */
+	current->suspend_count = 0;
+
+	/* Remove from ready queue if present */
+	/* (Not needed as state change handles this) */
+
+	/* Remove from waiting queues and release resources */
+	/* Check semaphores */
+	for (i = 0; i < MAX_SEMAPHORES; i++) {
+		if (semaphore_table[i].semid != 0) {
+			TCB **queue = &semaphore_table[i].wait_queue;
+			TCB *prev = NULL;
+			TCB *task = *queue;
+
+			while (task != NULL) {
+				if (task == current) {
+					/* Remove from wait queue */
+					if (prev == NULL) {
+						*queue = task->wait_next;
+					} else {
+						prev->wait_next = task->wait_next;
+					}
+					task->wait_next = NULL;
+					break;
+				}
+				prev = task;
+				task = task->wait_next;
+			}
+		}
+	}
+
+	/* Check mutexes - if task holds any mutex, unlock it */
+	for (i = 0; i < MAX_MUTEXES; i++) {
+		if (mutex_table[i].mtxid != 0) {
+			if (mutex_table[i].locked && mutex_table[i].owner == current) {
+				/* Unlock the mutex */
+				mutex_table[i].locked = false;
+				mutex_table[i].owner = NULL;
+
+				/* Wake up first waiting task */
+				TCB *waiting = mutex_table[i].wait_queue;
+				if (waiting != NULL) {
+					mutex_table[i].wait_queue = waiting->wait_next;
+					waiting->wait_next = NULL;
+					mutex_table[i].locked = true;
+					mutex_table[i].owner = waiting;
+					waiting->state = TS_READY;
+				}
+			}
+
+			/* Remove from wait queue if waiting */
+			TCB **queue = &mutex_table[i].wait_queue;
+			TCB *prev = NULL;
+			TCB *task = *queue;
+
+			while (task != NULL) {
+				if (task == current) {
+					if (prev == NULL) {
+						*queue = task->wait_next;
+					} else {
+						prev->wait_next = task->wait_next;
+					}
+					task->wait_next = NULL;
+					break;
+				}
+				prev = task;
+				task = task->wait_next;
+			}
+		}
+	}
+
+	/* Check event flags */
+	for (i = 0; i < MAX_EVENTFLAGS; i++) {
+		if (eventflag_table[i].flgid != 0) {
+			TCB **queue = &eventflag_table[i].wait_queue;
+			TCB *prev = NULL;
+			TCB *task = *queue;
+
+			while (task != NULL) {
+				if (task == current) {
+					if (prev == NULL) {
+						*queue = task->wait_next;
+					} else {
+						prev->wait_next = task->wait_next;
+					}
+					task->wait_next = NULL;
+					break;
+				}
+				prev = task;
+				task = task->wait_next;
+			}
+		}
+	}
+
+	/* Check message buffers */
+	for (i = 0; i < MAX_MSGBUFFERS; i++) {
+		if (msgbuffer_table[i].mbfid != 0) {
+			TCB **queue = &msgbuffer_table[i].recv_queue;
+			TCB *prev = NULL;
+			TCB *task = *queue;
+
+			while (task != NULL) {
+				if (task == current) {
+					if (prev == NULL) {
+						*queue = task->wait_next;
+					} else {
+						prev->wait_next = task->wait_next;
+					}
+					task->wait_next = NULL;
+					break;
+				}
+				prev = task;
+				task = task->wait_next;
+			}
+		}
+	}
+
+	/* Check mailboxes */
+	for (i = 0; i < MAX_MAILBOXES; i++) {
+		if (mailbox_table[i].mbxid != 0) {
+			TCB **queue = &mailbox_table[i].recv_queue;
+			TCB *prev = NULL;
+			TCB *task = *queue;
+
+			while (task != NULL) {
+				if (task == current) {
+					if (prev == NULL) {
+						*queue = task->wait_next;
+					} else {
+						prev->wait_next = task->wait_next;
+					}
+					task->wait_next = NULL;
+					break;
+				}
+				prev = task;
+				task = task->wait_next;
+			}
+		}
+	}
+
+	/* Cancel timeout if active */
+	current->wait_timeout = 0;
+
+	/* Set ctxtsk to NULL since current task is terminated */
+	ctxtsk = NULL;
+
+	/* Reschedule - will not return */
+	schedule();
+}
+
+/*
+ * System call: tk_ter_tsk - Terminate task
+ * Arguments: x0 = task ID
+ * Returns: E_OK, E_NOEXS, or E_OBJ in x0
+ */
+static ER svc_ter_tsk(SVC_REGS *regs)
+{
+	ID tskid = (ID)regs->x0;
+	TCB *current = (TCB *)ctxtsk;
+	TCB *target_task = NULL;
+	INT i;
+
+	/* Cannot terminate self (use tk_ext_tsk instead) */
+	if (current != NULL && current->tskid == tskid) {
+		regs->x0 = E_OBJ;
+		return E_OBJ;
+	}
+
+	/* Find target task */
+	for (i = 0; i < MAX_TASKS; i++) {
+		if (task_table[i].tskid == tskid) {
+			target_task = &task_table[i];
+			break;
+		}
+	}
+
+	if (target_task == NULL) {
+		regs->x0 = E_NOEXS;
+		return E_NOEXS;
+	}
+
+	/* Cannot terminate task in DORMANT or NONEXIST state */
+	if (target_task->state == TS_DORMANT || target_task->state == TS_NONEXIST) {
+		regs->x0 = E_OBJ;
+		return E_OBJ;
+	}
+
+	/* Change state to DORMANT */
+	target_task->state = TS_DORMANT;
+
+	/* Reset suspend count */
+	target_task->suspend_count = 0;
+
+	/* Remove from waiting queues and release resources */
+	/* Check semaphores */
+	for (i = 0; i < MAX_SEMAPHORES; i++) {
+		if (semaphore_table[i].semid != 0) {
+			TCB **queue = &semaphore_table[i].wait_queue;
+			TCB *prev = NULL;
+			TCB *task = *queue;
+
+			while (task != NULL) {
+				if (task == target_task) {
+					if (prev == NULL) {
+						*queue = task->wait_next;
+					} else {
+						prev->wait_next = task->wait_next;
+					}
+					task->wait_next = NULL;
+					break;
+				}
+				prev = task;
+				task = task->wait_next;
+			}
+		}
+	}
+
+	/* Check mutexes - if task holds any mutex, unlock it */
+	for (i = 0; i < MAX_MUTEXES; i++) {
+		if (mutex_table[i].mtxid != 0) {
+			if (mutex_table[i].locked && mutex_table[i].owner == target_task) {
+				/* Unlock the mutex */
+				mutex_table[i].locked = false;
+				mutex_table[i].owner = NULL;
+
+				/* Wake up first waiting task */
+				TCB *waiting = mutex_table[i].wait_queue;
+				if (waiting != NULL) {
+					mutex_table[i].wait_queue = waiting->wait_next;
+					waiting->wait_next = NULL;
+					mutex_table[i].locked = true;
+					mutex_table[i].owner = waiting;
+					waiting->state = TS_READY;
+				}
+			}
+
+			/* Remove from wait queue if waiting */
+			TCB **queue = &mutex_table[i].wait_queue;
+			TCB *prev = NULL;
+			TCB *task = *queue;
+
+			while (task != NULL) {
+				if (task == target_task) {
+					if (prev == NULL) {
+						*queue = task->wait_next;
+					} else {
+						prev->wait_next = task->wait_next;
+					}
+					task->wait_next = NULL;
+					break;
+				}
+				prev = task;
+				task = task->wait_next;
+			}
+		}
+	}
+
+	/* Check event flags */
+	for (i = 0; i < MAX_EVENTFLAGS; i++) {
+		if (eventflag_table[i].flgid != 0) {
+			TCB **queue = &eventflag_table[i].wait_queue;
+			TCB *prev = NULL;
+			TCB *task = *queue;
+
+			while (task != NULL) {
+				if (task == target_task) {
+					if (prev == NULL) {
+						*queue = task->wait_next;
+					} else {
+						prev->wait_next = task->wait_next;
+					}
+					task->wait_next = NULL;
+					break;
+				}
+				prev = task;
+				task = task->wait_next;
+			}
+		}
+	}
+
+	/* Check message buffers */
+	for (i = 0; i < MAX_MSGBUFFERS; i++) {
+		if (msgbuffer_table[i].mbfid != 0) {
+			TCB **queue = &msgbuffer_table[i].recv_queue;
+			TCB *prev = NULL;
+			TCB *task = *queue;
+
+			while (task != NULL) {
+				if (task == target_task) {
+					if (prev == NULL) {
+						*queue = task->wait_next;
+					} else {
+						prev->wait_next = task->wait_next;
+					}
+					task->wait_next = NULL;
+					break;
+				}
+				prev = task;
+				task = task->wait_next;
+			}
+		}
+	}
+
+	/* Check mailboxes */
+	for (i = 0; i < MAX_MAILBOXES; i++) {
+		if (mailbox_table[i].mbxid != 0) {
+			TCB **queue = &mailbox_table[i].recv_queue;
+			TCB *prev = NULL;
+			TCB *task = *queue;
+
+			while (task != NULL) {
+				if (task == target_task) {
+					if (prev == NULL) {
+						*queue = task->wait_next;
+					} else {
+						prev->wait_next = task->wait_next;
+					}
+					task->wait_next = NULL;
+					break;
+				}
+				prev = task;
+				task = task->wait_next;
+			}
+		}
+	}
+
+	/* Cancel timeout if active */
+	target_task->wait_timeout = 0;
+
+	/* No need to reschedule unless target was running */
+	/* (Scheduler will skip DORMANT tasks naturally) */
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
  * System call: Create mailbox
  * Returns: mailbox ID in x0 (or error)
  */
@@ -2708,9 +3053,6 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 	case SVC_GET_TIM:
 		svc_get_tim(regs);
 		break;
-	case SVC_EXT_TSK:
-		svc_ext_tsk(regs);
-		break;
 	case SVC_CRE_SEM:
 		svc_cre_sem(regs);
 		break;
@@ -2791,6 +3133,12 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 		break;
 	case SVC_FRSM_TSK:
 		svc_frsm_tsk(regs);
+		break;
+	case SVC_EXT_TSK:
+		svc_ext_tsk(regs);
+		break;
+	case SVC_TER_TSK:
+		svc_ter_tsk(regs);
 		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
@@ -3230,6 +3578,31 @@ static inline ER tk_frsm_tsk(ID tskid)
 	return (ER)r0;
 }
 
+/* Exit task (self termination) */
+static inline void tk_ext_tsk(void)
+{
+	__asm__ volatile(
+		"svc %0"
+		:
+		: "i"(SVC_EXT_TSK)
+		: "memory"
+	);
+	/* Does not return */
+}
+
+/* Terminate task */
+static inline ER tk_ter_tsk(ID tskid)
+{
+	register UW64 r0 __asm__("x0") = tskid;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_TER_TSK)
+		: "memory"
+	);
+	return (ER)r0;
+}
+
 /* Receive message from buffer */
 static inline INT tk_rcv_mbf(ID mbfid, void *msg)
 {
@@ -3461,6 +3834,7 @@ static void task1_main(INT stacd, void *exinf)
 	ID tid, task2_id;
 	ER err;
 	INT test_num = 0;
+	TCB *task2_tcb = NULL;
 
 	(void)stacd;
 	(void)exinf;
@@ -3469,7 +3843,7 @@ static void task1_main(INT stacd, void *exinf)
 	tid = tk_get_tid();
 	uart_puts("\n");
 	uart_puts("========================================\n");
-	uart_puts("  Task Suspend/Resume Test Suite\n");
+	uart_puts("  Task Termination Test Suite\n");
 	uart_puts("========================================\n\n");
 
 	uart_puts("[Task1] Starting tests...\n");
@@ -3478,21 +3852,29 @@ static void task1_main(INT stacd, void *exinf)
 	uart_puts("\n\n");
 
 	/* Wait for Task2 to start */
-	tk_dly_tsk(50);
+	tk_dly_tsk(100);
 
 	/* Get Task2 ID - assume it's tid+1 */
 	task2_id = tid + 1;
 
-	/* ===== Test 1: Basic suspend and resume ===== */
+	/* Get Task2 TCB for state checking */
+	for (INT i = 0; i < MAX_TASKS; i++) {
+		if (task_table[i].tskid == task2_id) {
+			task2_tcb = &task_table[i];
+			break;
+		}
+	}
+
+	/* ===== Test 1: tk_ter_tsk - Terminate running task ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Basic suspend and resume\n");
-	uart_puts("  Expected: Task2 stops when suspended, resumes when resumed\n");
+	uart_puts("] tk_ter_tsk - Terminate running task\n");
+	uart_puts("  Expected: Task2 enters DORMANT state\n");
 
-	uart_puts("  [Step 1] Task2 is running, suspending it...\n");
-	err = tk_sus_tsk(task2_id);
-	uart_puts("  tk_sus_tsk result: ");
+	uart_puts("  [Step 1] Task2 is running, terminating it...\n");
+	err = tk_ter_tsk(task2_id);
+	uart_puts("  tk_ter_tsk result: ");
 	uart_puthex(err);
 	if (err == E_OK) {
 		uart_puts(" (E_OK)\n");
@@ -3501,127 +3883,65 @@ static void task1_main(INT stacd, void *exinf)
 		goto test2;
 	}
 
-	/* Wait and verify Task2 stopped */
-	uart_puts("  [Step 2] Waiting 300ms to verify Task2 is suspended...\n");
-	tk_dly_tsk(300);
-	uart_puts("  (Task2 should have printed nothing during this time)\n");
-
-	uart_puts("  [Step 3] Resuming Task2...\n");
-	err = tk_rsm_tsk(task2_id);
-	uart_puts("  tk_rsm_tsk result: ");
-	uart_puthex(err);
-	if (err == E_OK) {
-		uart_puts(" (E_OK)\n");
-		uart_puts("  ✓ PASS\n\n");
+	uart_puts("  [Step 2] Checking Task2 state...\n");
+	if (task2_tcb != NULL && task2_tcb->state == TS_DORMANT) {
+		uart_puts("  Task2 state: TS_DORMANT ✓ PASS\n\n");
 	} else {
-		uart_puts(" ✗ FAIL\n\n");
+		uart_puts("  Task2 state: NOT DORMANT ✗ FAIL\n\n");
 	}
 
-	/* Wait for Task2 to run again */
-	tk_dly_tsk(100);
+	/* Wait to verify Task2 doesn't run */
+	tk_dly_tsk(200);
 
 test2:
-	/* ===== Test 2: Nested suspend (multiple suspend calls) ===== */
+	/* ===== Test 2: tk_ter_tsk on already DORMANT task ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Nested suspend - multiple suspend calls\n");
-	uart_puts("  Expected: Task2 requires multiple resumes to run again\n");
+	uart_puts("] tk_ter_tsk on DORMANT task\n");
+	uart_puts("  Expected: E_OBJ error\n");
 
-	uart_puts("  [Step 1] Suspending Task2 twice...\n");
-	err = tk_sus_tsk(task2_id);
-	if (err != E_OK) {
-		uart_puts("  First suspend failed ✗ FAIL\n\n");
-		goto test3;
-	}
-	err = tk_sus_tsk(task2_id);
-	if (err != E_OK) {
-		uart_puts("  Second suspend failed ✗ FAIL\n\n");
-		goto test3;
-	}
-	uart_puts("  Task2 suspended twice (suspend_count=2)\n");
-
-	uart_puts("  [Step 2] Resuming once...\n");
-	err = tk_rsm_tsk(task2_id);
-	if (err != E_OK) {
-		uart_puts("  Resume failed ✗ FAIL\n\n");
-		goto test3;
-	}
-	uart_puts("  Task2 should still be suspended (suspend_count=1)\n");
-	tk_dly_tsk(200);
-	uart_puts("  (Task2 should have printed nothing)\n");
-
-	uart_puts("  [Step 3] Resuming again to fully restore Task2...\n");
-	err = tk_rsm_tsk(task2_id);
-	if (err == E_OK) {
-		uart_puts("  ✓ PASS\n\n");
+	err = tk_ter_tsk(task2_id);
+	uart_puts("  Result: ");
+	uart_puthex(err);
+	if (err == E_OBJ) {
+		uart_puts(" (E_OBJ) ✓ PASS\n\n");
 	} else {
-		uart_puts("  Resume failed ✗ FAIL\n\n");
+		uart_puts(" ✗ FAIL (should return E_OBJ)\n\n");
 	}
-
-	tk_dly_tsk(100);
 
 test3:
-	/* ===== Test 3: Force resume (clears all suspend counts) ===== */
+	/* ===== Test 3: tk_ter_tsk - self-termination attempt ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Force resume - tk_frsm_tsk\n");
-	uart_puts("  Expected: Immediately resume regardless of suspend count\n");
+	uart_puts("] tk_ter_tsk self-termination prevention\n");
+	uart_puts("  Expected: E_OBJ when trying to terminate self\n");
 
-	uart_puts("  [Step 1] Suspending Task2 three times...\n");
-	err = tk_sus_tsk(task2_id);
-	err |= tk_sus_tsk(task2_id);
-	err |= tk_sus_tsk(task2_id);
-	if (err != E_OK) {
-		uart_puts("  Suspends failed ✗ FAIL\n\n");
-		goto test4;
-	}
-	uart_puts("  Task2 suspended 3 times (suspend_count=3)\n");
-
-	uart_puts("  [Step 2] Force resuming with tk_frsm_tsk...\n");
-	err = tk_frsm_tsk(task2_id);
-	if (err == E_OK) {
-		uart_puts("  Task2 should be running immediately\n");
-		tk_dly_tsk(100);
-		uart_puts("  ✓ PASS\n\n");
+	err = tk_ter_tsk(tid);
+	uart_puts("  Result: ");
+	uart_puthex(err);
+	if (err == E_OBJ) {
+		uart_puts(" (E_OBJ) ✓ PASS\n\n");
 	} else {
-		uart_puts("  Force resume failed ✗ FAIL\n\n");
+		uart_puts(" ✗ FAIL (should return E_OBJ)\n\n");
 	}
 
 test4:
-	/* ===== Test 4: Error case - self-suspend ===== */
+	/* ===== Test 4: tk_ter_tsk - non-existent task ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] Error case - self-suspend prevention\n");
-	uart_puts("  Expected: E_OBJ when trying to suspend self\n");
+	uart_puts("] tk_ter_tsk on non-existent task\n");
+	uart_puts("  Expected: E_NOEXS error\n");
 
-	err = tk_sus_tsk(tid);  /* Try to suspend self */
+	err = tk_ter_tsk(999);  /* Invalid task ID */
 	uart_puts("  Result: ");
 	uart_puthex(err);
-	if (err == E_OBJ) {
-		uart_puts(" (E_OBJ) ✓ PASS\n\n");
+	if (err == E_NOEXS) {
+		uart_puts(" (E_NOEXS) ✓ PASS\n\n");
 	} else {
-		uart_puts(" ✗ FAIL (should return E_OBJ)\n\n");
-	}
-
-	/* ===== Test 5: Error case - resume non-suspended task ===== */
-	test_num++;
-	uart_puts("[Test ");
-	uart_puthex(test_num);
-	uart_puts("] Error case - resume non-suspended task\n");
-	uart_puts("  Expected: E_OBJ when resuming task that's not suspended\n");
-
-	/* Make sure Task2 is not suspended */
-	tk_dly_tsk(50);
-	err = tk_rsm_tsk(task2_id);
-	uart_puts("  Result: ");
-	uart_puthex(err);
-	if (err == E_OBJ) {
-		uart_puts(" (E_OBJ) ✓ PASS\n\n");
-	} else {
-		uart_puts(" ✗ FAIL (should return E_OBJ)\n\n");
+		uart_puts(" ✗ FAIL (should return E_NOEXS)\n\n");
 	}
 
 	uart_puts("========================================\n");
