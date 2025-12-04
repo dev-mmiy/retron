@@ -450,6 +450,7 @@ static void schedule(void)
 	INT i;
 	TCB *next_task = NULL;
 	INT highest_priority = 999;  /* Lower number = higher priority */
+	TCB *prev_schedtsk = (TCB *)schedtsk;
 
 	/* Find READY task with highest priority (lowest priority number) */
 	for (i = 0; i < MAX_TASKS; i++) {
@@ -3386,11 +3387,13 @@ static inline UW64 tk_get_tim(void)
 /* Task delay (in milliseconds) - implemented in user space */
 static inline void tk_dly_tsk(UW64 dlytim)
 {
-	UW64 start = tk_get_tim();
-	/* Busy wait in user space (interrupts are enabled here) */
-	while ((tk_get_tim() - start) < dlytim) {
-		/* Timer interrupts will update timer_tick_count */
-	}
+	register UW64 delay __asm__("x0") = dlytim;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(delay)
+		: "i"(SVC_DLY_TSK)
+		: "memory"
+	);
 }
 
 /* Create semaphore */
