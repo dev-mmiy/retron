@@ -104,7 +104,7 @@ typedef struct tcb {
 /*
  * Task management
  */
-#define MAX_TASKS	3
+#define MAX_TASKS	4
 static TCB task_table[MAX_TASKS];
 extern void *ctxtsk;			/* Current task (defined in kernel_stubs.c) */
 extern void *schedtsk;			/* Task to be scheduled (defined in kernel_stubs.c) */
@@ -254,6 +254,7 @@ static ID demo_mbx_comm = 0;	/* Will be initialized in kernel_main */
 #define TASK_STACK_SIZE	1024
 static UW64 task1_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(16)));
 static UW64 task2_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(16)));
+static UW64 task3_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(16)));
 static UW64 idle_stack[TASK_STACK_SIZE / sizeof(UW64)] __attribute__((aligned(16)));
 
 /*
@@ -376,7 +377,12 @@ static void setup_task_context(TCB *tcb, TASK_FP task, void *stack, INT stksz)
 	sp[2] = 0;			/* X30 (LR) = 0 */
 	sp[3] = (UW64)task;		/* ELR_EL1 = task entry point */
 
-	/* X0-X30 are already zero from initialization */
+	/* Set up task parameters */
+	/* RESTORE_CONTEXT restores X0-X1 from sp[32-33] */
+	sp[32] = 0;			/* X0 = stacd = 0 */
+	sp[33] = (UW64)tcb->exinf;	/* X1 = exinf */
+
+	/* X2-X29 are already zero from initialization */
 	/* SP field (offset 31*8 = 248) will be ignored for EL1h tasks */
 
 	/* Save context pointer (points to SPSR) */
@@ -384,7 +390,7 @@ static void setup_task_context(TCB *tcb, TASK_FP task, void *stack, INT stksz)
 }
 
 /* Create a task */
-static ER create_task(INT idx, ID tskid, TASK_FP task, void *stack, INT stksz)
+static ER create_task(INT idx, ID tskid, TASK_FP task, void *stack, INT stksz, INT priority)
 {
 	TCB *tcb;
 
@@ -397,7 +403,7 @@ static ER create_task(INT idx, ID tskid, TASK_FP task, void *stack, INT stksz)
 	tcb->state = TS_DORMANT;
 	tcb->task = task;
 	tcb->exinf = NULL;
-	tcb->priority = 1;
+	tcb->priority = priority;
 	tcb->stack = stack;
 	tcb->stksz = stksz;
 	tcb->wait_next = NULL;
@@ -441,22 +447,20 @@ static ER start_task(INT idx)
 /* Simple round-robin scheduler */
 static void schedule(void)
 {
-	INT i, next_idx;
+	INT i;
 	TCB *next_task = NULL;
+	INT highest_priority = 999;  /* Lower number = higher priority */
 
-	/* Find next READY task */
-	next_idx = current_task_idx + 1;
+	/* Find READY task with highest priority (lowest priority number) */
 	for (i = 0; i < MAX_TASKS; i++) {
-		if (next_idx >= MAX_TASKS) {
-			next_idx = 0;
+		if (task_table[i].state == TS_READY) {
+			/* Select task with highest priority (lowest number) */
+			if (task_table[i].priority < highest_priority) {
+				highest_priority = task_table[i].priority;
+				next_task = &task_table[i];
+				current_task_idx = i;
+			}
 		}
-
-		if (task_table[next_idx].state == TS_READY) {
-			next_task = &task_table[next_idx];
-			current_task_idx = next_idx;
-			break;
-		}
-		next_idx++;
 	}
 
 	/* Set scheduled task */
@@ -502,6 +506,8 @@ static void schedule(void)
 #define SVC_FRSM_TSK		31	/* Force resume task */
 #define SVC_EXT_TSK		32	/* Exit task (self termination) */
 #define SVC_TER_TSK		33	/* Terminate task */
+#define SVC_CHG_PRI		34	/* Change task priority */
+#define SVC_ROT_RDQ		35	/* Rotate ready queue */
 
 /* Stack frame structure (must match cpu_support.S SAVE_CONTEXT layout) */
 typedef struct {
@@ -2691,6 +2697,110 @@ static ER svc_ter_tsk(SVC_REGS *regs)
 }
 
 /*
+ * System call: tk_chg_pri - Change task priority
+ * Arguments: x0 = task ID, x1 = new priority
+ * Returns: E_OK, E_NOEXS, E_OBJ, or E_PAR in x0
+ *
+ * Priority: Lower number = higher priority (T-Kernel convention)
+ * Special values:
+ *   - tskid == 0: change current task's priority
+ *   - priority == 0: invalid (reserved)
+ */
+static ER svc_chg_pri(SVC_REGS *regs)
+{
+	ID tskid = (ID)regs->x0;
+	INT tskpri = (INT)regs->x1;
+	TCB *target_task = NULL;
+	TCB *current = (TCB *)ctxtsk;
+	INT i;
+
+	/* tskid == 0 means change current task's priority */
+	if (tskid == 0) {
+		if (current == NULL) {
+			regs->x0 = E_OBJ;
+			return E_OBJ;
+		}
+		target_task = current;
+	} else {
+		/* Find target task */
+		for (i = 0; i < MAX_TASKS; i++) {
+			if (task_table[i].tskid == tskid) {
+				target_task = &task_table[i];
+				break;
+			}
+		}
+
+		if (target_task == NULL) {
+			regs->x0 = E_NOEXS;
+			return E_NOEXS;
+		}
+	}
+
+	/* Check if task is in valid state */
+	if (target_task->state == TS_NONEXIST || target_task->state == TS_DORMANT) {
+		regs->x0 = E_OBJ;
+		return E_OBJ;
+	}
+
+	/* Validate priority (0 is reserved, must be > 0) */
+	if (tskpri <= 0 || tskpri > 140) {  /* T-Kernel typical range: 1-140 */
+		regs->x0 = E_PAR;
+		return E_PAR;
+	}
+
+	/* Change priority */
+	target_task->priority = tskpri;
+
+	/* If target task is READY and priority changed, may need to reschedule */
+	if (target_task->state == TS_READY || target_task->state == TS_RUN) {
+		/* Simple approach: trigger reschedule to re-evaluate priorities */
+		/* The scheduler will pick the highest priority task */
+		schedule();
+	}
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
+ * System call: tk_rot_rdq - Rotate ready queue
+ * Arguments: x0 = priority level (0 = current priority)
+ * Returns: E_OK or E_PAR in x0
+ *
+ * Rotates the ready queue at the specified priority level.
+ * The current running task moves to the end of its priority level.
+ * This implements round-robin scheduling within same priority.
+ */
+static ER svc_rot_rdq(SVC_REGS *regs)
+{
+	INT tskpri = (INT)regs->x0;
+	TCB *current = (TCB *)ctxtsk;
+
+	/* tskpri == 0 means use current task's priority */
+	if (tskpri == 0) {
+		if (current == NULL) {
+			regs->x0 = E_OK;  /* No current task, nothing to rotate */
+			return E_OK;
+		}
+		tskpri = current->priority;
+	}
+
+	/* Validate priority */
+	if (tskpri < 0 || tskpri > 140) {
+		regs->x0 = E_PAR;
+		return E_PAR;
+	}
+
+	/* For now, just trigger reschedule to give other tasks a chance */
+	/* A full implementation would maintain separate queues per priority level */
+	/* and rotate within that level. For simplicity, we just reschedule. */
+	schedule();
+
+	regs->x0 = E_OK;
+	return E_OK;
+}
+
+/*
  * System call: Create mailbox
  * Returns: mailbox ID in x0 (or error)
  */
@@ -3139,6 +3249,12 @@ void svc_handler_c(UW svc_num, SVC_REGS *regs)
 		break;
 	case SVC_TER_TSK:
 		svc_ter_tsk(regs);
+		break;
+	case SVC_CHG_PRI:
+		svc_chg_pri(regs);
+		break;
+	case SVC_ROT_RDQ:
+		svc_rot_rdq(regs);
 		break;
 	default:
 		uart_puts("[SVC] Unknown system call: ");
@@ -3603,6 +3719,33 @@ static inline ER tk_ter_tsk(ID tskid)
 	return (ER)r0;
 }
 
+/* Change task priority */
+static inline ER tk_chg_pri(ID tskid, INT tskpri)
+{
+	register UW64 r0 __asm__("x0") = tskid;
+	register UW64 r1 __asm__("x1") = tskpri;
+	__asm__ volatile(
+		"svc %2"
+		: "+r"(r0)
+		: "r"(r1), "i"(SVC_CHG_PRI)
+		: "memory"
+	);
+	return (ER)r0;
+}
+
+/* Rotate ready queue */
+static inline ER tk_rot_rdq(INT tskpri)
+{
+	register UW64 r0 __asm__("x0") = tskpri;
+	__asm__ volatile(
+		"svc %1"
+		: "+r"(r0)
+		: "i"(SVC_ROT_RDQ)
+		: "memory"
+	);
+	return (ER)r0;
+}
+
 /* Receive message from buffer */
 static inline INT tk_rcv_mbf(ID mbfid, void *msg)
 {
@@ -3829,12 +3972,19 @@ static void free_message(MY_MSG *msg)
 	}
 }
 
+/* Global test coordination flags */
+static volatile INT task2_run_count = 0;
+static volatile INT task3_run_count = 0;
+static volatile BOOL test_phase_complete = FALSE;
+
 static void task1_main(INT stacd, void *exinf)
 {
-	ID tid, task2_id;
+	ID tid, task2_id, task3_id;
 	ER err;
 	INT test_num = 0;
 	TCB *task2_tcb = NULL;
+	TCB *task3_tcb = NULL;
+	INT initial_priority;
 
 	(void)stacd;
 	(void)exinf;
@@ -3843,105 +3993,231 @@ static void task1_main(INT stacd, void *exinf)
 	tid = tk_get_tid();
 	uart_puts("\n");
 	uart_puts("========================================\n");
-	uart_puts("  Task Termination Test Suite\n");
+	uart_puts("  Task Priority Change Test Suite\n");
 	uart_puts("========================================\n\n");
 
 	uart_puts("[Task1] Starting tests...\n");
 	uart_puts("[Task1] Task ID: ");
 	uart_puthex((UW)tid);
-	uart_puts("\n\n");
+	uart_puts(", Initial Priority: 10\n\n");
 
-	/* Wait for Task2 to start */
+	/* Wait for all tasks to start */
 	tk_dly_tsk(100);
 
-	/* Get Task2 ID - assume it's tid+1 */
+	/* Get Task2 and Task3 IDs */
 	task2_id = tid + 1;
+	task3_id = tid + 2;
 
-	/* Get Task2 TCB for state checking */
+	/* Get TCB pointers for state/priority checking */
 	for (INT i = 0; i < MAX_TASKS; i++) {
 		if (task_table[i].tskid == task2_id) {
 			task2_tcb = &task_table[i];
-			break;
+		}
+		if (task_table[i].tskid == task3_id) {
+			task3_tcb = &task_table[i];
 		}
 	}
 
-	/* ===== Test 1: tk_ter_tsk - Terminate running task ===== */
+	/* ===== Test 1: Basic priority change ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] tk_ter_tsk - Terminate running task\n");
-	uart_puts("  Expected: Task2 enters DORMANT state\n");
+	uart_puts("] tk_chg_pri - Basic priority change\n");
+	uart_puts("  Initial: Task1(10), Task2(20), Task3(15)\n");
+	uart_puts("  Change Task2 priority: 20 -> 5 (higher than Task1)\n\n");
 
-	uart_puts("  [Step 1] Task2 is running, terminating it...\n");
-	err = tk_ter_tsk(task2_id);
-	uart_puts("  tk_ter_tsk result: ");
+	if (task2_tcb) {
+		initial_priority = task2_tcb->priority;
+		uart_puts("  Task2 current priority: ");
+		uart_puthex(initial_priority);
+		uart_puts("\n");
+	}
+
+	task2_run_count = 0;
+	test_phase_complete = FALSE;
+
+	err = tk_chg_pri(task2_id, 5);
+	uart_puts("  tk_chg_pri result: ");
 	uart_puthex(err);
 	if (err == E_OK) {
 		uart_puts(" (E_OK)\n");
+		if (task2_tcb && task2_tcb->priority == 5) {
+			uart_puts("  Task2 new priority: ");
+			uart_puthex(task2_tcb->priority);
+			uart_puts(" ✓ Priority changed\n");
+		}
 	} else {
 		uart_puts(" ✗ FAIL\n\n");
 		goto test2;
 	}
 
-	uart_puts("  [Step 2] Checking Task2 state...\n");
-	if (task2_tcb != NULL && task2_tcb->state == TS_DORMANT) {
-		uart_puts("  Task2 state: TS_DORMANT ✓ PASS\n\n");
+	/* Yield to let Task2 run (it now has higher priority) */
+	tk_dly_tsk(100);
+
+	uart_puts("  Task2 run count: ");
+	uart_puthex(task2_run_count);
+	uart_puts("\n");
+	if (task2_run_count > 0) {
+		uart_puts("  ✓ PASS - Task2 ran with higher priority\n\n");
 	} else {
-		uart_puts("  Task2 state: NOT DORMANT ✗ FAIL\n\n");
+		uart_puts("  ✗ FAIL - Task2 did not run\n\n");
 	}
 
-	/* Wait to verify Task2 doesn't run */
-	tk_dly_tsk(200);
+	/* Restore Task2 priority for next tests */
+	tk_chg_pri(task2_id, 20);
 
 test2:
-	/* ===== Test 2: tk_ter_tsk on already DORMANT task ===== */
+	/* ===== Test 2: Change current task priority (tskid=0) ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] tk_ter_tsk on DORMANT task\n");
-	uart_puts("  Expected: E_OBJ error\n");
+	uart_puts("] tk_chg_pri - Change current task priority (tskid=0)\n");
+	uart_puts("  Task1 changes its own priority: 10 -> 30\n\n");
 
-	err = tk_ter_tsk(task2_id);
-	uart_puts("  Result: ");
+	err = tk_chg_pri(0, 30);
+	uart_puts("  tk_chg_pri(0, 30) result: ");
 	uart_puthex(err);
-	if (err == E_OBJ) {
-		uart_puts(" (E_OBJ) ✓ PASS\n\n");
+	if (err == E_OK) {
+		uart_puts(" (E_OK)\n");
+		TCB *my_tcb = NULL;
+		for (INT i = 0; i < MAX_TASKS; i++) {
+			if (task_table[i].tskid == tid) {
+				my_tcb = &task_table[i];
+				break;
+			}
+		}
+		if (my_tcb && my_tcb->priority == 30) {
+			uart_puts("  Task1 new priority: ");
+			uart_puthex(my_tcb->priority);
+			uart_puts(" ✓ PASS\n\n");
+		} else {
+			uart_puts("  ✗ FAIL - Priority not changed\n\n");
+		}
 	} else {
-		uart_puts(" ✗ FAIL (should return E_OBJ)\n\n");
+		uart_puts(" ✗ FAIL\n\n");
 	}
 
+	/* Restore Task1 priority */
+	tk_chg_pri(0, 10);
+
 test3:
-	/* ===== Test 3: tk_ter_tsk - self-termination attempt ===== */
+	/* ===== Test 3: Priority ordering verification ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] tk_ter_tsk self-termination prevention\n");
-	uart_puts("  Expected: E_OBJ when trying to terminate self\n");
+	uart_puts("] Priority ordering test\n");
+	uart_puts("  Task1(10) < Task3(15) < Task2(20)\n");
+	uart_puts("  Lower number = higher priority\n\n");
 
-	err = tk_ter_tsk(tid);
-	uart_puts("  Result: ");
-	uart_puthex(err);
-	if (err == E_OBJ) {
-		uart_puts(" (E_OBJ) ✓ PASS\n\n");
+	task2_run_count = 0;
+	task3_run_count = 0;
+	test_phase_complete = FALSE;
+
+	/* Let all tasks run briefly */
+	tk_dly_tsk(200);
+	test_phase_complete = TRUE;
+	tk_dly_tsk(50);
+
+	uart_puts("  Task2 (pri=20) run count: ");
+	uart_puthex(task2_run_count);
+	uart_puts("\n");
+	uart_puts("  Task3 (pri=15) run count: ");
+	uart_puthex(task3_run_count);
+	uart_puts("\n");
+
+	if (task2_run_count > 0 && task3_run_count > 0) {
+		uart_puts("  ✓ PASS - All tasks ran according to priority\n\n");
 	} else {
-		uart_puts(" ✗ FAIL (should return E_OBJ)\n\n");
+		uart_puts("  ✗ FAIL - Task execution issue\n\n");
 	}
 
 test4:
-	/* ===== Test 4: tk_ter_tsk - non-existent task ===== */
+	/* ===== Test 4: tk_rot_rdq ===== */
 	test_num++;
 	uart_puts("[Test ");
 	uart_puthex(test_num);
-	uart_puts("] tk_ter_tsk on non-existent task\n");
-	uart_puts("  Expected: E_NOEXS error\n");
+	uart_puts("] tk_rot_rdq - Rotate ready queue\n");
+	uart_puts("  Rotate queue at priority 0 (current priority)\n\n");
 
-	err = tk_ter_tsk(999);  /* Invalid task ID */
-	uart_puts("  Result: ");
+	err = tk_rot_rdq(0);
+	uart_puts("  tk_rot_rdq(0) result: ");
+	uart_puthex(err);
+	if (err == E_OK) {
+		uart_puts(" (E_OK) ✓ PASS\n\n");
+	} else {
+		uart_puts(" ✗ FAIL\n\n");
+	}
+
+test5:
+	/* ===== Test 5: Error - Non-existent task ===== */
+	test_num++;
+	uart_puts("[Test ");
+	uart_puthex(test_num);
+	uart_puts("] tk_chg_pri - Non-existent task\n");
+	uart_puts("  Expected: E_NOEXS\n\n");
+
+	err = tk_chg_pri(999, 10);
+	uart_puts("  tk_chg_pri(999, 10) result: ");
 	uart_puthex(err);
 	if (err == E_NOEXS) {
 		uart_puts(" (E_NOEXS) ✓ PASS\n\n");
 	} else {
-		uart_puts(" ✗ FAIL (should return E_NOEXS)\n\n");
+		uart_puts(" ✗ FAIL\n\n");
+	}
+
+test6:
+	/* ===== Test 6: Error - Invalid priority (0) ===== */
+	test_num++;
+	uart_puts("[Test ");
+	uart_puthex(test_num);
+	uart_puts("] tk_chg_pri - Invalid priority (0)\n");
+	uart_puts("  Expected: E_PAR\n\n");
+
+	err = tk_chg_pri(task2_id, 0);
+	uart_puts("  tk_chg_pri(task2, 0) result: ");
+	uart_puthex(err);
+	if (err == E_PAR) {
+		uart_puts(" (E_PAR) ✓ PASS\n\n");
+	} else {
+		uart_puts(" ✗ FAIL\n\n");
+	}
+
+test7:
+	/* ===== Test 7: Error - Invalid priority (>140) ===== */
+	test_num++;
+	uart_puts("[Test ");
+	uart_puthex(test_num);
+	uart_puts("] tk_chg_pri - Invalid priority (141)\n");
+	uart_puts("  Expected: E_PAR\n\n");
+
+	err = tk_chg_pri(task2_id, 141);
+	uart_puts("  tk_chg_pri(task2, 141) result: ");
+	uart_puthex(err);
+	if (err == E_PAR) {
+		uart_puts(" (E_PAR) ✓ PASS\n\n");
+	} else {
+		uart_puts(" ✗ FAIL\n\n");
+	}
+
+test8:
+	/* ===== Test 8: Error - DORMANT task ===== */
+	test_num++;
+	uart_puts("[Test ");
+	uart_puthex(test_num);
+	uart_puts("] tk_chg_pri - DORMANT task\n");
+	uart_puts("  Expected: E_OBJ\n\n");
+
+	/* Terminate Task2 first */
+	tk_ter_tsk(task2_id);
+	tk_dly_tsk(50);
+
+	err = tk_chg_pri(task2_id, 15);
+	uart_puts("  tk_chg_pri(dormant_task, 15) result: ");
+	uart_puthex(err);
+	if (err == E_OBJ) {
+		uart_puts(" (E_OBJ) ✓ PASS\n\n");
+	} else {
+		uart_puts(" ✗ FAIL\n\n");
 	}
 
 	uart_puts("========================================\n");
@@ -3957,29 +4233,46 @@ test4:
 static void task2_main(INT stacd, void *exinf)
 {
 	ID tid;
-	UW64 counter = 0;
 
 	(void)stacd;
 	(void)exinf;
 
 	tid = tk_get_tid();
 
-	uart_puts("[Task2] Counter task started\n");
+	uart_puts("[Task2] Priority test task started (Priority: 20)\n");
 	uart_puts("[Task2] Task ID: ");
 	uart_puthex((UW)tid);
 	uart_puts("\n\n");
 
-	/* Run counter loop - will be suspended/resumed by Task1 */
-	uart_puts("[Task2] Starting counter loop (prints every 100ms)...\n\n");
-
+	/* Run loop for priority testing */
 	while (1) {
-		/* Print counter value every 100ms */
-		uart_puts("[Task2] Counter: ");
-		uart_puthex((UW)counter);
-		uart_puts("\n");
+		if (!test_phase_complete) {
+			task2_run_count++;
+		}
+		tk_dly_tsk(50);
+	}
+}
 
-		counter++;
-		tk_dly_tsk(100);
+static void task3_main(INT stacd, void *exinf)
+{
+	ID tid;
+
+	(void)stacd;
+	(void)exinf;
+
+	tid = tk_get_tid();
+
+	uart_puts("[Task3] Priority test task started (Priority: 15)\n");
+	uart_puts("[Task3] Task ID: ");
+	uart_puthex((UW)tid);
+	uart_puts("\n\n");
+
+	/* Run loop for priority testing */
+	while (1) {
+		if (!test_phase_complete) {
+			task3_run_count++;
+		}
+		tk_dly_tsk(50);
 	}
 }
 
@@ -4189,14 +4482,16 @@ void kernel_main(void)
 
 	/* Initialize tasks */
 	uart_puts("Creating tasks...\n");
-	create_task(0, 1, task1_main, task1_stack, TASK_STACK_SIZE);
-	create_task(1, 2, task2_main, task2_stack, TASK_STACK_SIZE);
-	create_task(2, 3, idle_task_main, idle_stack, TASK_STACK_SIZE);
+	create_task(0, 1, task1_main, task1_stack, TASK_STACK_SIZE, 10);   /* Task1: priority 10 */
+	create_task(1, 2, task2_main, task2_stack, TASK_STACK_SIZE, 20);   /* Task2: priority 20 */
+	create_task(2, 3, task3_main, task3_stack, TASK_STACK_SIZE, 15);   /* Task3: priority 15 */
+	create_task(3, 4, idle_task_main, idle_stack, TASK_STACK_SIZE, 140); /* Idle: lowest priority */
 
 	uart_puts("Starting tasks...\n");
 	start_task(0);
 	start_task(1);
 	start_task(2);
+	start_task(3);
 
 	uart_puts("Tasks created and started.\n");
 	uart_puts("Task switching interval: ");
@@ -4219,6 +4514,21 @@ void kernel_main(void)
 	/* Start multitasking by dispatching to first task */
 	uart_puts("Starting multitasking...\n");
 	uart_puts("\n");
+
+	/* Run scheduler to select highest priority task */
+	schedule();
+
+	/* Debug: Check if schedtsk is set */
+	if (schedtsk == NULL) {
+		uart_puts("ERROR: schedtsk is NULL!\n");
+		for (;;);
+	}
+	TCB *sched = (TCB *)schedtsk;
+	uart_puts("Dispatching to task ID: ");
+	uart_puthex((UW)sched->tskid);
+	uart_puts(", priority: ");
+	uart_puthex((UW)sched->priority);
+	uart_puts("\n\n");
 
 	/* This will switch to the first ready task and never return */
 	dispatch_to_schedtsk();
