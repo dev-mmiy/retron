@@ -329,7 +329,7 @@ static pte_t page_tables_l2_dev[L2_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 
 /* Forward declarations */
 static void uart_puts(const char *s);
-static void uart_puthex(UW val);
+static void uart_puthex64(UW64 val);
 
 /* External dispatcher function (from cpu_support.S) */
 extern void dispatch_to_schedtsk(void);
@@ -4361,15 +4361,15 @@ static void uart_puts(const char *s)
 	}
 }
 
-static void uart_puthex(UW val)
+static void uart_puthex64(UW64 val)
 {
-	const char hex[] = "0123456789ABCDEF";
-	int i;
+        const char hex[] = "0123456789ABCDEF";
+        int i;
 
-	uart_puts("0x");
-	for (i = 28; i >= 0; i -= 4) {
-		uart_putc(hex[(val >> i) & 0xF]);
-	}
+        uart_puts("0x");
+        for (i = 60; i >= 0; i -= 4) {
+                uart_putc(hex[(val >> i) & 0xF]);
+        }
 }
 
 /*
@@ -4420,19 +4420,19 @@ void kernel_main(void)
 	/* Read and display timer frequency */
 	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(cnt));
 	uart_puts("Timer frequency: ");
-	uart_puthex(cnt);
+        uart_puthex64(cnt);
 	uart_puts(" Hz\n");
 
 	/* Read current exception level */
 	__asm__ volatile("mrs %0, CurrentEL" : "=r"(cnt));
 	uart_puts("Current EL: ");
-	uart_puthex((cnt >> 2) & 0x3);
+        uart_puthex64((cnt >> 2) & 0x3);
 	uart_puts("\n");
 
 	/* Read MIDR_EL1 for CPU identification */
 	__asm__ volatile("mrs %0, midr_el1" : "=r"(cnt));
 	uart_puts("CPU ID (MIDR_EL1): ");
-	uart_puthex(cnt);
+        uart_puthex64(cnt);
 	uart_puts("\n");
 
 	uart_puts("\n");
@@ -4560,7 +4560,7 @@ void kernel_main(void)
 
 	uart_puts("Tasks created and started.\n");
 	uart_puts("Task switching interval: ");
-	uart_puthex(task_switch_interval);
+        uart_puthex64(task_switch_interval);
 	uart_puts(" ms\n");
 	uart_puts("\n");
 
@@ -4854,7 +4854,7 @@ void irq_exception_handler(void *sp)
 	} else {
 		/* Unknown interrupt */
 		uart_puts("IRQ: ");
-		uart_puthex(intno);
+                uart_puthex64(intno);
 		uart_puts("\n");
 	}
 
