@@ -450,7 +450,6 @@ static void schedule(void)
 	INT i;
 	TCB *next_task = NULL;
 	INT highest_priority = 999;  /* Lower number = higher priority */
-	TCB *prev_schedtsk = (TCB *)schedtsk;
 
 	/* Find READY task with highest priority (lowest priority number) */
 	for (i = 0; i < MAX_TASKS; i++) {
@@ -4126,7 +4125,6 @@ test2:
 	/* Restore Task1 priority */
 	tk_chg_pri(0, 10);
 
-test3:
 	/* ===== Test 3: Priority ordering verification ===== */
 	test_num++;
 	uart_puts("[Test ");
@@ -4181,7 +4179,6 @@ test3:
 		uart_puts("  ✗ FAIL - Task execution issue\n\n");
 	}
 
-test4:
 	/* ===== Test 4: tk_rot_rdq ===== */
 	test_num++;
 	uart_puts("[Test ");
@@ -4198,7 +4195,6 @@ test4:
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-test5:
 	/* ===== Test 5: Error - Non-existent task ===== */
 	test_num++;
 	uart_puts("[Test ");
@@ -4215,7 +4211,6 @@ test5:
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-test6:
 	/* ===== Test 6: Error - Invalid priority (0) ===== */
 	test_num++;
 	uart_puts("[Test ");
@@ -4232,7 +4227,6 @@ test6:
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-test7:
 	/* ===== Test 7: Error - Invalid priority (>140) ===== */
 	test_num++;
 	uart_puts("[Test ");
@@ -4249,7 +4243,6 @@ test7:
 		uart_puts(" ✗ FAIL\n\n");
 	}
 
-test8:
 	/* ===== Test 8: Error - DORMANT task ===== */
 	test_num++;
 	uart_puts("[Test ");
@@ -4326,11 +4319,17 @@ static void task3_main(INT stacd, void *exinf)
 
 static void idle_task_main(INT stacd, void *exinf)
 {
+	static volatile INT idle_count = 0;
+
 	(void)stacd;
 	(void)exinf;
 
 	while (1) {
-		uart_puts("[Idle] Running...\n");
+		/* Only print occasionally to reduce output spam */
+		if (++idle_count >= 10000) {
+			idle_count = 0;
+			/* Idle task is running - system is waiting for events */
+		}
 
 		/* Wait for interrupt */
 		__asm__ volatile("wfi");
