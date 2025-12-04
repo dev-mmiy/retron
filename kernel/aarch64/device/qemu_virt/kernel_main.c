@@ -659,6 +659,9 @@ static ER svc_sig_sem(SVC_REGS *regs)
 		waiting_task->state = TS_READY;
 		waiting_task->wait_next = NULL;
 		waiting_task->wait_obj = NULL;
+
+		/* Reschedule to allow the woken task to run */
+		schedule();
 	} else {
 		/* No waiting tasks, increment counter */
 		if (sem->semcnt < sem->maxsem) {
@@ -3972,10 +3975,13 @@ static void free_message(MY_MSG *msg)
 	}
 }
 
-/* Global test coordination flags */
-static volatile INT task2_run_count = 0;
-static volatile INT task3_run_count = 0;
-static volatile BOOL test_phase_complete = FALSE;
+/* Global test coordination variables */
+static ID task2_sem = 0;                    /* Task2制御用セマフォ */
+static ID task3_sem = 0;                    /* Task3制御用セマフォ */
+static volatile INT task2_run_count = 0;    /* Task2実行回数 */
+static volatile INT task3_run_count = 0;    /* Task3実行回数 */
+static volatile BOOL task2_done = FALSE;    /* Task2動作完了フラグ */
+static volatile BOOL task3_done = FALSE;    /* Task3動作完了フラグ */
 
 static void task1_main(INT stacd, void *exinf)
 {
@@ -3984,7 +3990,6 @@ static void task1_main(INT stacd, void *exinf)
 	INT test_num = 0;
 	TCB *task2_tcb = NULL;
 	TCB *task3_tcb = NULL;
-	INT initial_priority;
 
 	(void)stacd;
 	(void)exinf;
@@ -4001,8 +4006,9 @@ static void task1_main(INT stacd, void *exinf)
 	uart_puthex((UW)tid);
 	uart_puts(", Initial Priority: 10\n\n");
 
-	/* Wait for all tasks to start */
-	tk_dly_tsk(100);
+	/* Wait for all tasks to start and enter semaphore wait */
+	/* タイマー間隔100ms × 3回 = 300ms待機して、Task2とTask3が確実にセマフォ待ちに入る */
+	tk_dly_tsk(300);
 
 	/* Get Task2 and Task3 IDs */
 	task2_id = tid + 1;
@@ -4026,44 +4032,61 @@ static void task1_main(INT stacd, void *exinf)
 	uart_puts("  Initial: Task1(10), Task2(20), Task3(15)\n");
 	uart_puts("  Change Task2 priority: 20 -> 5 (higher than Task1)\n\n");
 
+	/* Step 1: 現在の優先度を確認 */
 	if (task2_tcb) {
-		initial_priority = task2_tcb->priority;
 		uart_puts("  Task2 current priority: ");
-		uart_puthex(initial_priority);
+		uart_puthex(task2_tcb->priority);
 		uart_puts("\n");
 	}
 
-	task2_run_count = 0;
-	test_phase_complete = FALSE;
-
+	/* Step 2: 優先度を変更 */
 	err = tk_chg_pri(task2_id, 5);
-	uart_puts("  tk_chg_pri result: ");
+	uart_puts("  tk_chg_pri(task2, 5) result: ");
 	uart_puthex(err);
 	if (err == E_OK) {
 		uart_puts(" (E_OK)\n");
-		if (task2_tcb && task2_tcb->priority == 5) {
-			uart_puts("  Task2 new priority: ");
-			uart_puthex(task2_tcb->priority);
-			uart_puts(" ✓ Priority changed\n");
-		}
 	} else {
 		uart_puts(" ✗ FAIL\n\n");
 		goto test2;
 	}
 
-	/* Yield to let Task2 run (it now has higher priority) */
+	/* Step 3: 優先度が変更されたことを確認 */
+	if (task2_tcb && task2_tcb->priority == 5) {
+		uart_puts("  Task2 new priority: ");
+		uart_puthex(task2_tcb->priority);
+		uart_puts(" ✓ Priority changed\n");
+	} else {
+		uart_puts("  ✗ FAIL - Priority not changed\n\n");
+		goto test2;
+	}
+
+	/* Step 4: Task2を起動（セマフォシグナル） */
+	task2_run_count = 0;
+	task2_done = FALSE;
+	err = tk_sig_sem(task2_sem);
+	if (err != E_OK) {
+		uart_puts("  ✗ FAIL - tk_sig_sem failed\n\n");
+		goto test2;
+	}
+
+	/* Step 5: Task2が実行されるまで待つ */
+	/* Task2は優先度5なのでTask1(10)より優先される */
 	tk_dly_tsk(100);
 
+	/* Step 6: Task2が実行されたことを確認 */
 	uart_puts("  Task2 run count: ");
 	uart_puthex(task2_run_count);
+	uart_puts(", done flag: ");
+	uart_puthex(task2_done ? 1 : 0);
 	uart_puts("\n");
-	if (task2_run_count > 0) {
+
+	if (task2_done && task2_run_count > 0) {
 		uart_puts("  ✓ PASS - Task2 ran with higher priority\n\n");
 	} else {
 		uart_puts("  ✗ FAIL - Task2 did not run\n\n");
 	}
 
-	/* Restore Task2 priority for next tests */
+	/* Step 7: Task2の優先度を元に戻す */
 	tk_chg_pri(task2_id, 20);
 
 test2:
@@ -4109,20 +4132,44 @@ test3:
 	uart_puts("  Task1(10) < Task3(15) < Task2(20)\n");
 	uart_puts("  Lower number = higher priority\n\n");
 
+	/* リセット */
 	task2_run_count = 0;
 	task3_run_count = 0;
-	test_phase_complete = FALSE;
+	task2_done = FALSE;
+	task3_done = FALSE;
 
-	/* Let all tasks run briefly */
-	tk_dly_tsk(200);
-	test_phase_complete = TRUE;
-	tk_dly_tsk(50);
+	/* Task3とTask2の状態を確認 */
+	uart_puts("  Task2 state before signal: ");
+	uart_puthex(task2_tcb ? task2_tcb->state : 0xFF);
+	uart_puts(", Task3 state: ");
+	uart_puthex(task3_tcb ? task3_tcb->state : 0xFF);
+	uart_puts("\n");
+
+	/* Task3とTask2を起動 */
+	uart_puts("  Signaling Task3 (priority 15)...\n");
+	err = tk_sig_sem(task3_sem);
+	uart_puts("  tk_sig_sem(task3_sem) result: ");
+	uart_puthex(err);
+	uart_puts("\n");
+	tk_dly_tsk(150);  /* Task3実行を待つ（タイマー割り込み待ち） */
+
+	uart_puts("  Signaling Task2 (priority 20)...\n");
+	err = tk_sig_sem(task2_sem);
+	uart_puts("  tk_sig_sem(task2_sem) result: ");
+	uart_puthex(err);
+	uart_puts("\n");
+	tk_dly_tsk(150);  /* Task2実行を待つ（タイマー割り込み待ち） */
 
 	uart_puts("  Task2 (pri=20) run count: ");
 	uart_puthex(task2_run_count);
+	uart_puts(", done: ");
+	uart_puthex(task2_done ? 1 : 0);
 	uart_puts("\n");
+
 	uart_puts("  Task3 (pri=15) run count: ");
 	uart_puthex(task3_run_count);
+	uart_puts(", done: ");
+	uart_puthex(task3_done ? 1 : 0);
 	uart_puts("\n");
 
 	if (task2_run_count > 0 && task3_run_count > 0) {
@@ -4232,47 +4279,45 @@ test8:
 
 static void task2_main(INT stacd, void *exinf)
 {
-	ID tid;
+	ER err;
 
 	(void)stacd;
 	(void)exinf;
 
-	tid = tk_get_tid();
-
-	uart_puts("[Task2] Priority test task started (Priority: 20)\n");
-	uart_puts("[Task2] Task ID: ");
-	uart_puthex((UW)tid);
-	uart_puts("\n\n");
-
-	/* Run loop for priority testing */
+	/* セマフォ制御によるテストヘルパータスク */
 	while (1) {
-		if (!test_phase_complete) {
-			task2_run_count++;
+		/* Task1からの起動信号を待つ（無限待ち） */
+		err = tk_wai_sem_u(task2_sem, TMO_FEVR);
+		if (err != E_OK) {
+			uart_puts("[Task2] ERROR: tk_wai_sem_u failed\n");
+			continue;
 		}
-		tk_dly_tsk(50);
+
+		/* 動作実行 */
+		task2_run_count++;
+		task2_done = TRUE;
 	}
 }
 
 static void task3_main(INT stacd, void *exinf)
 {
-	ID tid;
+	ER err;
 
 	(void)stacd;
 	(void)exinf;
 
-	tid = tk_get_tid();
-
-	uart_puts("[Task3] Priority test task started (Priority: 15)\n");
-	uart_puts("[Task3] Task ID: ");
-	uart_puthex((UW)tid);
-	uart_puts("\n\n");
-
-	/* Run loop for priority testing */
+	/* セマフォ制御によるテストヘルパータスク */
 	while (1) {
-		if (!test_phase_complete) {
-			task3_run_count++;
+		/* Task1からの起動信号を待つ（無限待ち） */
+		err = tk_wai_sem_u(task3_sem, TMO_FEVR);
+		if (err != E_OK) {
+			uart_puts("[Task3] ERROR: tk_wai_sem_u failed\n");
+			continue;
 		}
-		tk_dly_tsk(50);
+
+		/* 動作実行 */
+		task3_run_count++;
+		task3_done = TRUE;
 	}
 }
 
@@ -4412,6 +4457,24 @@ void kernel_main(void)
 	uart_puts("Demo semaphore created: ID=");
 	uart_puthex((UW)demo_sem);
 	uart_puts("\n");
+
+	/* Create test control semaphores (initial count=0) */
+	uart_puts("Creating test control semaphores...\n");
+	task2_sem = direct_cre_sem(0, 10);  /* Task2制御用 */
+	task3_sem = direct_cre_sem(0, 10);  /* Task3制御用 */
+
+	if (task2_sem <= 0 || task3_sem <= 0) {
+		uart_puts("ERROR: Failed to create test semaphores\n");
+		for (;;);
+	}
+
+	uart_puts("Test semaphores created:\n");
+	uart_puts("  task2_sem: ");
+	uart_puthex((UW)task2_sem);
+	uart_puts("\n");
+	uart_puts("  task3_sem: ");
+	uart_puthex((UW)task3_sem);
+	uart_puts("\n\n");
 
 	/* Initialize mutexes */
 	uart_puts("Initializing mutexes...\n");
