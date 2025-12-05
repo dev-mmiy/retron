@@ -228,7 +228,7 @@ impl InitConfigParser {
         // カンマ区切りの値を手動で分割
         let mut parts = [""; 4];
         let mut part_count = 0;
-        let mut current_part = 0;
+        let _current_part = 0;
         let mut start = 0;
         
         for (i, &byte) in value.as_bytes().iter().enumerate() {

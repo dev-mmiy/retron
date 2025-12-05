@@ -95,7 +95,7 @@ impl StdioTerminal {
     }
 
     /// 文字列を出力
-    fn print(&mut self, text: &str) {
+    fn print(&mut self, _text: &str) {
         // 実際の実装ではVGAバッファやUARTに出力
         // ここでは簡易的な実装
     }

@@ -111,34 +111,34 @@ impl Terminal {
     /// デフォルトコマンドを登録
     fn register_default_commands(&mut self) {
         // help コマンド
-        self.register_command("help", CommandType::Builtin, "Show available commands");
-        
+        let _ = self.register_command("help", CommandType::Builtin, "Show available commands");
+
         // ls コマンド
-        self.register_command("ls", CommandType::Builtin, "List directory contents");
-        
+        let _ = self.register_command("ls", CommandType::Builtin, "List directory contents");
+
         // pwd コマンド
-        self.register_command("pwd", CommandType::Builtin, "Print working directory");
-        
+        let _ = self.register_command("pwd", CommandType::Builtin, "Print working directory");
+
         // cd コマンド
-        self.register_command("cd", CommandType::Builtin, "Change directory");
-        
+        let _ = self.register_command("cd", CommandType::Builtin, "Change directory");
+
         // cat コマンド
-        self.register_command("cat", CommandType::Builtin, "Display file contents");
-        
+        let _ = self.register_command("cat", CommandType::Builtin, "Display file contents");
+
         // echo コマンド
-        self.register_command("echo", CommandType::Builtin, "Display text");
-        
+        let _ = self.register_command("echo", CommandType::Builtin, "Display text");
+
         // clear コマンド
-        self.register_command("clear", CommandType::Builtin, "Clear screen");
-        
+        let _ = self.register_command("clear", CommandType::Builtin, "Clear screen");
+
         // exit コマンド
-        self.register_command("exit", CommandType::Builtin, "Exit terminal");
-        
+        let _ = self.register_command("exit", CommandType::Builtin, "Exit terminal");
+
         // version コマンド
-        self.register_command("version", CommandType::Builtin, "Show system version");
-        
+        let _ = self.register_command("version", CommandType::Builtin, "Show system version");
+
         // info コマンド
-        self.register_command("info", CommandType::Builtin, "Show system information");
+        let _ = self.register_command("info", CommandType::Builtin, "Show system information");
     }
 
     /// コマンドを登録
@@ -480,7 +480,7 @@ impl Terminal {
     }
 
     /// 行を表示
-    fn print_line(&self, line: &str) {
+    fn print_line(&self, _line: &str) {
         // VGAバッファに書き込み
         // 実際の実装ではVGAバッファに直接書き込む
     }

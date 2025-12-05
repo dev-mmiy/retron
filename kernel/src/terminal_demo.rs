@@ -1,7 +1,6 @@
 //! ターミナルのデモンストレーション機能
 
-use core::option::Option::{self, Some, None};
-use core::result::Result::{self, Ok, Err};
+use core::result::Result::{Ok, Err};
 use crate::terminal::*;
 
 /// ターミナルのデモンストレーション

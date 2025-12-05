@@ -1,7 +1,6 @@
 //! ファイルシステムのデモンストレーション機能
 
-use core::option::Option::{self, Some, None};
-use core::result::Result::{self, Ok, Err};
+use core::result::Result::{Ok, Err};
 use crate::filesystem::*;
 
 /// ファイルシステムのデモンストレーション
@@ -27,7 +26,7 @@ fn demo_basic_operations() {
 
     // ファイルの作成
     match fs.create_file("/hello.txt", FilePermissions::default()) {
-        Ok(id) => {
+        Ok(_id) => {
             // ファイル作成成功
         },
         Err(_) => return,
@@ -35,7 +34,7 @@ fn demo_basic_operations() {
 
     // ディレクトリの作成
     match fs.create_directory("/documents", FilePermissions::default()) {
-        Ok(id) => {
+        Ok(_id) => {
             // ディレクトリ作成成功
         },
         Err(_) => return,
@@ -109,7 +108,7 @@ fn demo_statistics() {
         Err(_) => return,
     };
 
-    let stats = fs.get_stats();
+    let _stats = fs.get_stats();
     
     // 統計情報の表示（実際の実装ではVGAバッファに書き込む）
     // ここでは簡易的なデモンストレーション
@@ -209,7 +208,7 @@ fn create_demo_files(fs: &mut FileSystem) {
 
 /// ファイルシステム統計情報を表示
 fn display_filesystem_stats(fs: &FileSystem) {
-    let stats = fs.get_stats();
+    let _stats = fs.get_stats();
     
     // 統計情報の表示（実際の実装ではVGAバッファに書き込む）
     // ここでは簡易的なデモンストレーション
@@ -268,7 +267,7 @@ pub fn filesystem_performance_demo() {
     }
 
     // 統計情報の表示
-    let stats = fs.get_stats();
+    let _stats = fs.get_stats();
     
     // 統計情報の表示（実際の実装ではVGAバッファに書き込む）
     // ここでは簡易的なデモンストレーション
