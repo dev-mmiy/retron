@@ -480,7 +480,7 @@ impl Terminal {
     }
 
     /// 行を表示
-    fn print_line(&self, line: &str) {
+    fn print_line(&self, _line: &str) {
         // VGAバッファに書き込み
         // 実際の実装ではVGAバッファに直接書き込む
     }

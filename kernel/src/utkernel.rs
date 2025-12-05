@@ -43,7 +43,7 @@ impl UTKernelLayer {
     }
 
     /// タスクを作成 (tk_cre_tsk互換)
-    pub fn create_task(&mut self, priority: TaskPriority, stack_size: usize, entry_point: fn()) -> Option<TaskId> {
+    pub fn create_task(&mut self, priority: TaskPriority, stack_size: usize, _entry_point: fn()) -> Option<TaskId> {
         // スタック領域の割り当て
         let stack: *mut u8 = unsafe {
             core::ptr::null_mut()
@@ -107,7 +107,7 @@ impl UTKernelLayer {
 
     /// メモリプールを作成 (tk_cre_mpf互換)
     pub fn create_memory_pool(&mut self, block_size: usize, block_count: usize) -> Option<usize> {
-        let total_size = block_size * block_count;
+        let _total_size = block_size * block_count;
         let memory: *mut u8 = unsafe {
             core::ptr::null_mut()
         };

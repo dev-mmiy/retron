@@ -1,7 +1,7 @@
 //! ターミナルのテスト機能
 
-use core::option::Option::{self, Some, None};
-use core::result::Result::{self, Ok, Err};
+use core::option::Option::{Some, None};
+use core::result::Result::{Ok, Err};
 use crate::terminal::*;
 
 /// ターミナルのテストを実行

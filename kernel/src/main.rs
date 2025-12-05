@@ -5,7 +5,7 @@
 
 use core::panic::PanicInfo;
 use core::arch::asm;
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
+use x86_64::structures::idt::InterruptStackFrame;
 
 mod test;
 mod simple;

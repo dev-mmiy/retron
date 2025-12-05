@@ -205,7 +205,7 @@ impl FileSystem {
     }
 
     /// 親ノードから子ノードを名前で検索
-    fn find_child_by_name(&self, parent_id: u32, name: &str) -> FSResult<u32> {
+    fn find_child_by_name(&self, parent_id: u32, _name: &str) -> FSResult<u32> {
         let parent = self.get_node(parent_id)?;
         
         if parent.metadata.file_type != FileType::Directory {
@@ -214,7 +214,7 @@ impl FileSystem {
 
         // ディレクトリエントリを検索
         for i in 0..parent.block_count as usize {
-            let block_id = parent.data_blocks[i];
+            let _block_id = parent.data_blocks[i];
             // 実際の実装では、ブロックからディレクトリエントリを読み取る
             // ここでは簡易実装
         }
