@@ -18,7 +18,7 @@ static ALLOCATOR: LockedHeap = LockedHeap::empty();
 /// メモリ管理の初期化
 pub fn init() {
     unsafe {
-        let heap_start = HEAP.as_ptr() as *mut u8;
+        let heap_start = core::ptr::addr_of_mut!(HEAP) as *mut u8;
         let heap_size = HEAP_SIZE;
         ALLOCATOR.lock().init(heap_start, heap_size);
     }

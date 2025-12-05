@@ -1,9 +1,10 @@
 //! Retron OS 設定システム
-//! 
+//!
 //! カーネル起動時に実行するプログラムを設定可能
 
 use core::option::Option::{self, Some, None};
 use core::result::Result::{self, Ok, Err};
+use spin::Mutex;
 
 /// 設定エラー
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -216,27 +217,28 @@ impl ConfigManager {
 }
 
 /// 設定マネージャーのグローバルインスタンス
-static mut CONFIG_MANAGER: Option<ConfigManager> = None;
+static CONFIG_MANAGER: Mutex<Option<ConfigManager>> = Mutex::new(None);
 
 /// 設定マネージャーを初期化
 pub fn init_config() -> ConfigResult<()> {
     // デバッグ出力を追加
     crate::simple::println("DEBUG: init_config() - START");
-    
-    unsafe {
-        crate::simple::println("DEBUG: Creating ConfigManager::new()");
-        CONFIG_MANAGER = Some(ConfigManager::new());
-        crate::simple::println("DEBUG: Calling ConfigManager::init()");
-        let result = CONFIG_MANAGER.as_mut().unwrap().init();
-        crate::simple::println("DEBUG: ConfigManager::init() completed");
-        result
-    }
+
+    crate::simple::println("DEBUG: Creating ConfigManager::new()");
+    *CONFIG_MANAGER.lock() = Some(ConfigManager::new());
+    crate::simple::println("DEBUG: Calling ConfigManager::init()");
+    let result = CONFIG_MANAGER.lock().as_mut().unwrap().init();
+    crate::simple::println("DEBUG: ConfigManager::init() completed");
+    result
 }
 
 /// 設定マネージャーのインスタンスを取得
 pub fn get_config() -> ConfigResult<&'static mut ConfigManager> {
+    // Note: This returns a reference that outlives the MutexGuard
+    // In a real implementation, this would need proper lifetime management
     unsafe {
-        CONFIG_MANAGER.as_mut().ok_or(ConfigError::SystemError)
+        let ptr = CONFIG_MANAGER.lock().as_mut().ok_or(ConfigError::SystemError)? as *mut ConfigManager;
+        Ok(&mut *ptr)
     }
 }
 

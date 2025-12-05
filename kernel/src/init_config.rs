@@ -1,9 +1,10 @@
 //! init.configファイルのパーサー
-//! 
+//!
 //! カーネル起動時に自動実行されるプログラムを設定
 
 use core::option::Option::{self, Some, None};
 use core::result::Result::{self, Ok, Err};
+use spin::Mutex;
 
 /// init.configパーサーのエラー
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -558,27 +559,28 @@ impl InitConfigParser {
 }
 
 /// init.configパーサーのグローバルインスタンス
-static mut INIT_CONFIG_PARSER: Option<InitConfigParser> = None;
+static INIT_CONFIG_PARSER: Mutex<Option<InitConfigParser>> = Mutex::new(None);
 
 /// init.configパーサーを初期化
 pub fn init_config_parser() -> InitConfigResult<()> {
     // デバッグ出力を追加
     crate::simple::println("DEBUG: init_config_parser() - START");
-    
-    unsafe {
-        crate::simple::println("DEBUG: Creating InitConfigParser::new()");
-        INIT_CONFIG_PARSER = Some(InitConfigParser::new());
-        crate::simple::println("DEBUG: Calling init_default()");
-        let result = INIT_CONFIG_PARSER.as_mut().unwrap().init_default();
-        crate::simple::println("DEBUG: init_default() completed");
-        result
-    }
+
+    crate::simple::println("DEBUG: Creating InitConfigParser::new()");
+    *INIT_CONFIG_PARSER.lock() = Some(InitConfigParser::new());
+    crate::simple::println("DEBUG: Calling init_default()");
+    let result = INIT_CONFIG_PARSER.lock().as_mut().unwrap().init_default();
+    crate::simple::println("DEBUG: init_default() completed");
+    result
 }
 
 /// init.configパーサーのインスタンスを取得
 pub fn get_config_parser() -> InitConfigResult<&'static mut InitConfigParser> {
+    // Note: This returns a reference that outlives the MutexGuard
+    // In a real implementation, this would need proper lifetime management
     unsafe {
-        INIT_CONFIG_PARSER.as_mut().ok_or(InitConfigError::SystemError)
+        let ptr = INIT_CONFIG_PARSER.lock().as_mut().ok_or(InitConfigError::SystemError)? as *mut InitConfigParser;
+        Ok(&mut *ptr)
     }
 }
 

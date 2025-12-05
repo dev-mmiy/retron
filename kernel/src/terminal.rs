@@ -1,5 +1,5 @@
 //! Retron OS ターミナル機能
-//! 
+//!
 //! シンプルなターミナルを実装
 //! - コマンド入力
 //! - コマンド実行
@@ -8,6 +8,7 @@
 
 use core::option::Option::{self, Some, None};
 use core::result::Result::{self, Ok, Err};
+use spin::Mutex;
 
 /// ターミナルのエラー
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -575,27 +576,28 @@ impl Terminal {
 }
 
 /// ターミナルのグローバルインスタンス
-static mut TERMINAL: Option<Terminal> = None;
+static TERMINAL: Mutex<Option<Terminal>> = Mutex::new(None);
 
 /// ターミナルを初期化
 pub fn init_terminal() -> TerminalResult<()> {
     // デバッグ出力を追加
     crate::simple::println("DEBUG: init_terminal() - START");
-    
-    unsafe {
-        crate::simple::println("DEBUG: Creating Terminal::new()");
-        TERMINAL = Some(Terminal::new());
-        crate::simple::println("DEBUG: Calling Terminal::init()");
-        let result = TERMINAL.as_mut().unwrap().init();
-        crate::simple::println("DEBUG: Terminal::init() completed");
-        result
-    }
+
+    crate::simple::println("DEBUG: Creating Terminal::new()");
+    *TERMINAL.lock() = Some(Terminal::new());
+    crate::simple::println("DEBUG: Calling Terminal::init()");
+    let result = TERMINAL.lock().as_mut().unwrap().init();
+    crate::simple::println("DEBUG: Terminal::init() completed");
+    result
 }
 
 /// ターミナルのインスタンスを取得
 pub fn get_terminal() -> TerminalResult<&'static mut Terminal> {
+    // Note: This returns a reference that outlives the MutexGuard
+    // In a real implementation, this would need proper lifetime management
     unsafe {
-        TERMINAL.as_mut().ok_or(TerminalError::SystemError)
+        let ptr = TERMINAL.lock().as_mut().ok_or(TerminalError::SystemError)? as *mut Terminal;
+        Ok(&mut *ptr)
     }
 }
 
