@@ -88,9 +88,12 @@ run-harddisk:
 		-accel tcg
 
 # テスト実行
+# Note: Standard cargo test is not supported for no_std kernels
+# Use run-qemu for integration testing instead
 test:
-	@echo "Running tests..."
-	cargo test --manifest-path kernel/Cargo.toml
+	@echo "Note: Standard cargo test is not available for no_std kernels"
+	@echo "The kernel uses #![no_std] which prevents using the standard test framework"
+	@echo "Use 'make run-qemu' for integration testing instead"
 
 # 開発用デバッグビルド
 debug:
