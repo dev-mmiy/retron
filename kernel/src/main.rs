@@ -5,18 +5,27 @@
 
 use core::panic::PanicInfo;
 use core::arch::asm;
-use x86_64::structures::idt::InterruptStackFrame;
 
+#[allow(dead_code)]
 mod test;
 mod simple;
+#[allow(dead_code)]
 mod filesystem;
+#[allow(dead_code)]
 mod fs_test;
+#[allow(dead_code)]
 mod fs_demo;
+#[allow(dead_code)]
 mod terminal;
+#[allow(dead_code)]
 mod terminal_test;
+#[allow(dead_code)]
 mod terminal_demo;
+#[allow(dead_code)]
 mod config;
+#[allow(dead_code)]
 mod stdio_terminal;
+#[allow(dead_code)]
 mod init_config;
 
 /// カーネルエントリーポイント（Multiboot対応）
@@ -74,105 +83,6 @@ fn init() {
     // init_utkernel();
 }
 
-/// システム準備完了メッセージ
-fn show_system_ready() {
-    simple::println("");
-    simple::println("==========================================");
-    simple::println("    Retron OS System Ready");
-    simple::println("==========================================");
-    simple::println("All services initialized successfully.");
-    simple::println("Filesystem operations available.");
-    simple::println("Terminal control active.");
-    simple::println("");
-}
-
-/// デモコマンドの実行（無効化）
-fn run_demo_commands() {
-    // デモ機能は無効化されています
-    simple::println("Demo functionality disabled.");
-}
-
-/// デモコマンドの実行（無効化）
-fn execute_demo_command(_command: &str) {
-    // デモ機能は無効化されています
-    simple::println("Command execution disabled.");
-}
-
-/// テストの実行
-fn run_tests() {
-    // テスト結果をVGAに表示
-    let vga_buffer = 0xB8000 as *mut u16;
-    let test_result = test::run_all_tests();
-    
-    if test_result {
-        // テスト成功
-        let message = b"Tests: PASS";
-        for (i, &byte) in message.iter().enumerate() {
-            unsafe {
-                *vga_buffer.add(80 + i) = 0x0A00 | (byte as u16); // 緑文字
-            }
-        }
-    } else {
-        // テスト失敗
-        let message = b"Tests: FAIL";
-        for (i, &byte) in message.iter().enumerate() {
-            unsafe {
-                *vga_buffer.add(80 + i) = 0x0C00 | (byte as u16); // 赤文字
-            }
-        }
-    }
-}
-
-/// シンプルなHello World表示
-fn print_hello() {
-    // VGAテキストモードでの表示（0xB8000がVGAテキストバッファの開始アドレス）
-    let vga_buffer = 0xB8000 as *mut u16;
-    let message = b"Hello, Retron OS - 2 !";
-    
-    for (i, &byte) in message.iter().enumerate() {
-        unsafe {
-            *vga_buffer.add(i) = 0x0F00 | (byte as u16); // 白文字、黒背景
-        }
-    }
-}
-
-/// メモリ管理の初期化
-fn init_memory() {
-    // メモリマネージャーの初期化
-    // TODO: メモリプールの設定
-}
-
-/// 割り込み処理の初期化
-fn init_interrupts() {
-    // IDTの設定
-    // TODO: 割り込みハンドラーの登録
-}
-
-/// デバイスドライバーの初期化
-fn init_devices() {
-    // シリアルポートの初期化
-    // TODO: デバイスドライバーの初期化
-}
-
-/// μT-Kernel互換レイヤーの初期化
-fn init_utkernel() {
-    // μT-Kernel 3.x APIの初期化
-    // TODO: タスク管理、メモリ管理、同期処理の初期化
-}
-
-/// カーネルのメインループ
-fn kernel_loop() {
-    // システムアイドル処理
-    simple::halt();
-}
-
-/// CPUを停止
-fn halt() {
-    unsafe {
-        asm!("hlt");
-    }
-}
-
 /// パニックハンドラー
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -185,10 +95,4 @@ fn panic(_info: &PanicInfo) -> ! {
 fn alloc_error(_layout: core::alloc::Layout) -> ! {
     // メモリ不足時の処理
     loop {}
-}
-
-/// 割り込みハンドラー（ダミー）
-extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    // タイマー割り込みの処理
-    // TODO: タスクスケジューリング
 }

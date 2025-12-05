@@ -90,19 +90,19 @@ impl ConfigManager {
     /// デフォルトプログラムを登録
     fn register_default_programs(&mut self) {
         // ターミナルプログラム
-        self.register_program("terminal", ProgramType::Terminal, true, 100, "Interactive terminal");
-        
+        let _ = self.register_program("terminal", ProgramType::Terminal, true, 100, "Interactive terminal");
+
         // シェルプログラム
-        self.register_program("shell", ProgramType::Shell, false, 90, "Command shell");
-        
+        let _ = self.register_program("shell", ProgramType::Shell, false, 90, "Command shell");
+
         // システム情報プログラム
-        self.register_program("sysinfo", ProgramType::Application, false, 80, "System information");
-        
+        let _ = self.register_program("sysinfo", ProgramType::Application, false, 80, "System information");
+
         // ファイルマネージャープログラム
-        self.register_program("filemanager", ProgramType::Application, false, 70, "File manager");
-        
+        let _ = self.register_program("filemanager", ProgramType::Application, false, 70, "File manager");
+
         // テストプログラム
-        self.register_program("test", ProgramType::Application, false, 60, "System test");
+        let _ = self.register_program("test", ProgramType::Application, false, 60, "System test");
     }
 
     /// プログラムを登録
