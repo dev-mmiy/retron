@@ -1,5 +1,5 @@
 //! タスク管理モジュール
-//! 
+//!
 //! μT-Kernel互換のタスク管理機能を提供
 
 use crate::prelude::*;
@@ -63,9 +63,14 @@ impl TaskManager {
     }
 
     /// タスクを作成
-    pub fn create_task(&mut self, priority: TaskPriority, stack_size: usize, entry_point: fn()) -> Option<TaskId> {
+    pub fn create_task(
+        &mut self,
+        priority: TaskPriority,
+        stack_size: usize,
+        entry_point: fn(),
+    ) -> Option<TaskId> {
         let task_id = self.next_task_id.fetch_add(1, Ordering::SeqCst);
-        
+
         if task_id >= 32 {
             return None;
         }

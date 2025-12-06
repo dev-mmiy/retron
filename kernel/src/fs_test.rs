@@ -1,7 +1,7 @@
 //! ファイルシステムのテスト機能
 
-use core::result::Result::{Ok, Err};
 use crate::filesystem::*;
+use core::result::Result::{Err, Ok};
 
 /// ファイルシステムのテストを実行
 pub fn test_filesystem() -> bool {
@@ -52,14 +52,14 @@ fn test_basic_file_operations() -> bool {
             if node.metadata.file_type != FileType::Regular {
                 return false;
             }
-        },
+        }
         Err(_) => return false,
     }
 
     // 既存ファイルの作成テスト（エラーが期待される）
     match fs.create_file("/test.txt", FilePermissions::default()) {
-        Ok(_) => return false, // エラーが期待される
-        Err(FSError::AlreadyExists) => {}, // 期待されるエラー
+        Ok(_) => return false,            // エラーが期待される
+        Err(FSError::AlreadyExists) => {} // 期待されるエラー
         Err(_) => return false,
     }
 
@@ -85,7 +85,7 @@ fn test_directory_operations() -> bool {
             if node.metadata.file_type != FileType::Directory {
                 return false;
             }
-        },
+        }
         Err(_) => return false,
     }
 
@@ -101,7 +101,7 @@ fn test_directory_operations() -> bool {
             if node.metadata.file_type != FileType::Directory {
                 return false;
             }
-        },
+        }
         Err(_) => return false,
     }
 
@@ -116,16 +116,16 @@ fn test_filesystem_stats() -> bool {
     };
 
     let stats = fs.get_stats();
-    
+
     // 基本的な統計情報のチェック
     if stats.total_nodes == 0 {
         return false;
     }
-    
+
     if stats.used_nodes == 0 {
         return false;
     }
-    
+
     if stats.free_nodes == 0 {
         return false;
     }
@@ -176,14 +176,18 @@ pub fn test_filesystem_detailed() -> bool {
             if fs.create_file(path, FilePermissions::default()).is_err() {
                 return false;
             }
-        } else if fs.create_directory(path, FilePermissions::default()).is_err() {
+        } else if fs
+            .create_directory(path, FilePermissions::default())
+            .is_err()
+        {
             return false;
         }
     }
 
     // 統計情報の確認
     let stats = fs.get_stats();
-    if stats.used_nodes < 7 { // ルート + 6つのテストファイル/ディレクトリ
+    if stats.used_nodes < 7 {
+        // ルート + 6つのテストファイル/ディレクトリ
         return false;
     }
 
@@ -228,17 +232,21 @@ pub fn test_filesystem_performance() -> bool {
         path[pos + 2] = b'x';
         path[pos + 3] = b't';
         path[pos + 4] = 0;
-        
+
         // 文字列に変換
         let path_str = core::str::from_utf8(&path[..pos + 4]).unwrap_or("/perf_test_0.txt");
-        if fs.create_file(path_str, FilePermissions::default()).is_err() {
+        if fs
+            .create_file(path_str, FilePermissions::default())
+            .is_err()
+        {
             return false;
         }
     }
 
     // 統計情報の確認
     let stats = fs.get_stats();
-    if stats.used_nodes < 101 { // ルート + 100個のテストファイル
+    if stats.used_nodes < 101 {
+        // ルート + 100個のテストファイル
         return false;
     }
 

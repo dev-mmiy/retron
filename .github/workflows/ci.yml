@@ -37,7 +37,7 @@ jobs:
       - name: Run Clippy
         run: |
           cd kernel
-          cargo clippy --lib --bin retron-kernel -- -D warnings
+          cargo clippy --lib --bins -- -D warnings
 
   build:
     name: Build

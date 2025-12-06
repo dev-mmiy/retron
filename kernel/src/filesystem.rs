@@ -5,8 +5,8 @@
 //! - ファイル操作
 //! - メタデータ管理
 
-use core::option::Option::{self, Some, None};
-use core::result::Result::{self, Ok, Err};
+use core::option::Option::{self, None, Some};
+use core::result::Result::{self, Err, Ok};
 use spin::Mutex;
 
 /// ファイルシステムのエラー
@@ -163,7 +163,7 @@ impl FileSystem {
             data_blocks: [0; 16],
             block_count: 0,
         };
-        
+
         self.nodes[0] = Some(root_node);
         self.stats.used_nodes = 1;
         self.stats.free_nodes = 1023;
@@ -174,7 +174,7 @@ impl FileSystem {
         if node_id as usize >= self.nodes.len() {
             return Err(FSError::NotFound);
         }
-        
+
         self.nodes[node_id as usize]
             .as_ref()
             .ok_or(FSError::NotFound)
@@ -185,7 +185,7 @@ impl FileSystem {
         if node_id as usize >= self.nodes.len() {
             return Err(FSError::NotFound);
         }
-        
+
         self.nodes[node_id as usize]
             .as_mut()
             .ok_or(FSError::NotFound)
@@ -214,7 +214,7 @@ impl FileSystem {
     /// 親ノードから子ノードを名前で検索
     fn find_child_by_name(&self, parent_id: u32, _name: &str) -> FSResult<u32> {
         let parent = self.get_node(parent_id)?;
-        
+
         if parent.metadata.file_type != FileType::Directory {
             return Err(FSError::InvalidPath);
         }
@@ -377,7 +377,7 @@ impl FileSystem {
         if self.stats.used_nodes > self.stats.total_nodes {
             return Err(FSError::Corrupted);
         }
-        
+
         if self.stats.used_blocks > self.stats.total_blocks {
             return Err(FSError::Corrupted);
         }

@@ -3,30 +3,30 @@
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 
-use core::panic::PanicInfo;
 use core::arch::asm;
+use core::panic::PanicInfo;
 
-#[allow(dead_code)]
-mod test;
-mod simple;
-#[allow(dead_code)]
-mod filesystem;
-#[allow(dead_code)]
-mod fs_test;
-#[allow(dead_code)]
-mod fs_demo;
-#[allow(dead_code)]
-mod terminal;
-#[allow(dead_code)]
-mod terminal_test;
-#[allow(dead_code)]
-mod terminal_demo;
 #[allow(dead_code)]
 mod config;
 #[allow(dead_code)]
-mod stdio_terminal;
+mod filesystem;
+#[allow(dead_code)]
+mod fs_demo;
+#[allow(dead_code)]
+mod fs_test;
 #[allow(dead_code)]
 mod init_config;
+mod simple;
+#[allow(dead_code)]
+mod stdio_terminal;
+#[allow(dead_code)]
+mod terminal;
+#[allow(dead_code)]
+mod terminal_demo;
+#[allow(dead_code)]
+mod terminal_test;
+#[allow(dead_code)]
+mod test;
 
 /// カーネルエントリーポイント（Multiboot対応）
 #[no_mangle]
@@ -36,11 +36,11 @@ pub extern "C" fn kernel_main() -> ! {
     simple::println("KERNEL_MAIN: Debug test 1");
     simple::println("KERNEL_MAIN: Debug test 2");
     simple::println("KERNEL_MAIN: About to call init()");
-    
+
     // 初期化処理
     init();
     simple::println("KERNEL_MAIN: init() completed");
-    
+
     // システム準備完了メッセージ
     simple::println("");
     simple::println("==========================================");
@@ -53,9 +53,9 @@ pub extern "C" fn kernel_main() -> ! {
     simple::println("System will now halt.");
     simple::println("Press Ctrl+C to exit QEMU");
     simple::println("");
-    
+
     simple::println("DEBUG: About to enter halt loop");
-    
+
     // システム終了
     loop {
         // CPUを停止（割り込み待ち）
@@ -72,13 +72,13 @@ fn init() {
     simple::println("KERNEL: Basic test 1");
     simple::println("KERNEL: Basic test 2");
     simple::println("KERNEL: Basic test 3");
-    
+
     // 最小限のテスト完了
     simple::println("KERNEL: All basic tests completed");
 
     // システム準備完了
     simple::println("KERNEL: System ready");
-    
+
     // μT-Kernel互換レイヤーの初期化（簡易版）
     // init_utkernel();
 }

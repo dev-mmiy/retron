@@ -3,8 +3,8 @@
 //! 割り込みハンドラーの管理と処理
 
 use crate::prelude::*;
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 use spin::Mutex;
+use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
 /// 割り込み番号
 pub type InterruptNumber = u8;
@@ -34,12 +34,20 @@ impl InterruptManager {
     }
 
     /// 割り込みハンドラーを登録
-    pub fn register_handler(&mut self, interrupt_number: InterruptNumber, handler: InterruptHandler) {
+    pub fn register_handler(
+        &mut self,
+        interrupt_number: InterruptNumber,
+        handler: InterruptHandler,
+    ) {
         self.handlers[interrupt_number as usize] = Some(handler);
     }
 
     /// 割り込みハンドラーを実行
-    pub fn handle_interrupt(&self, interrupt_number: InterruptNumber, _stack_frame: InterruptStackFrame) {
+    pub fn handle_interrupt(
+        &self,
+        interrupt_number: InterruptNumber,
+        _stack_frame: InterruptStackFrame,
+    ) {
         if let Some(_handler) = self.handlers[interrupt_number as usize] {
             // 割り込みハンドラーの呼び出し（簡易実装）
             // handler(stack_frame);

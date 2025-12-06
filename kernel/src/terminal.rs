@@ -6,8 +6,8 @@
 //! - 出力表示
 //! - 履歴管理
 
-use core::option::Option::{self, Some, None};
-use core::result::Result::{self, Ok, Err};
+use core::option::Option::{self, None, Some};
+use core::result::Result::{self, Err, Ok};
 use spin::Mutex;
 
 /// ターミナルのエラー
@@ -149,7 +149,12 @@ impl Terminal {
     }
 
     /// コマンドを登録
-    pub fn register_command(&mut self, name: &str, command_type: CommandType, description: &str) -> TerminalResult<()> {
+    pub fn register_command(
+        &mut self,
+        name: &str,
+        command_type: CommandType,
+        description: &str,
+    ) -> TerminalResult<()> {
         if self.command_count >= 32 {
             return Err(TerminalError::BufferFull);
         }
@@ -206,7 +211,10 @@ impl Terminal {
         if len1 != str2.len() {
             return false;
         }
-        str1.iter().take(len1).zip(str2.as_bytes()).all(|(a, b)| a == b)
+        str1.iter()
+            .take(len1)
+            .zip(str2.as_bytes())
+            .all(|(a, b)| a == b)
     }
 
     /// コマンドを実行
@@ -216,11 +224,10 @@ impl Terminal {
         let mut arg_count = 0;
 
         for part in parts {
-            if !part.is_empty()
-                && arg_count < 8 {
-                    args[arg_count] = part;
-                    arg_count += 1;
-                }
+            if !part.is_empty() && arg_count < 8 {
+                args[arg_count] = part;
+                arg_count += 1;
+            }
         }
 
         if arg_count == 0 {
@@ -251,20 +258,23 @@ impl Terminal {
         self.print_line("Available commands:");
         for i in 0..self.command_count as usize {
             if let Some(command) = &self.commands[i] {
-                let name = core::str::from_utf8(&command.name[..command.name_len as usize]).unwrap_or("");
-                let desc = core::str::from_utf8(&command.description[..command.description_len as usize]).unwrap_or("");
+                let name =
+                    core::str::from_utf8(&command.name[..command.name_len as usize]).unwrap_or("");
+                let desc =
+                    core::str::from_utf8(&command.description[..command.description_len as usize])
+                        .unwrap_or("");
                 // 簡易的な文字列結合（format!マクロの代わり）
                 let mut output = [0u8; 128];
                 let mut pos = 0;
                 let name_bytes = name.as_bytes();
                 let desc_bytes = desc.as_bytes();
-                
+
                 // "  " を追加
                 output[pos] = b' ';
                 pos += 1;
                 output[pos] = b' ';
                 pos += 1;
-                
+
                 // コマンド名を追加
                 for &byte in name_bytes {
                     if pos < 127 {
@@ -272,7 +282,7 @@ impl Terminal {
                         pos += 1;
                     }
                 }
-                
+
                 // " - " を追加
                 if pos < 125 {
                     output[pos] = b' ';
@@ -282,7 +292,7 @@ impl Terminal {
                     output[pos] = b' ';
                     pos += 1;
                 }
-                
+
                 // 説明を追加
                 for &byte in desc_bytes {
                     if pos < 127 {
@@ -290,7 +300,7 @@ impl Terminal {
                         pos += 1;
                     }
                 }
-                
+
                 let output_str = core::str::from_utf8(&output[..pos]).unwrap_or("");
                 self.print_line(output_str);
             }
@@ -328,7 +338,7 @@ impl Terminal {
             let mut pos = 0;
             let prefix = b"Changed directory to: ";
             let path_bytes = path.as_bytes();
-            
+
             // プレフィックスを追加
             for &byte in prefix {
                 if pos < 63 {
@@ -336,7 +346,7 @@ impl Terminal {
                     pos += 1;
                 }
             }
-            
+
             // パスを追加
             for &byte in path_bytes {
                 if pos < 63 {
@@ -344,7 +354,7 @@ impl Terminal {
                     pos += 1;
                 }
             }
-            
+
             let output_str = core::str::from_utf8(&output[..pos]).unwrap_or("");
             self.print_line(output_str);
         }
@@ -364,7 +374,7 @@ impl Terminal {
         let prefix = b"Contents of ";
         let suffix = b":";
         let filename_bytes = filename.as_bytes();
-        
+
         // プレフィックスを追加
         for &byte in prefix {
             if pos < 63 {
@@ -372,7 +382,7 @@ impl Terminal {
                 pos += 1;
             }
         }
-        
+
         // ファイル名を追加
         for &byte in filename_bytes {
             if pos < 63 {
@@ -380,7 +390,7 @@ impl Terminal {
                 pos += 1;
             }
         }
-        
+
         // サフィックスを追加
         for &byte in suffix {
             if pos < 63 {
@@ -388,7 +398,7 @@ impl Terminal {
                 pos += 1;
             }
         }
-        
+
         let output_str = core::str::from_utf8(&output[..pos]).unwrap_or("");
         self.print_line(output_str);
         self.print_line("  (File contents would be displayed here)");
@@ -400,13 +410,13 @@ impl Terminal {
         // 簡易的な文字列結合
         let mut output = [0u8; 256];
         let mut pos = 0;
-        
+
         for (i, arg) in args.iter().enumerate() {
             if i > 0 && pos < 255 {
                 output[pos] = b' ';
                 pos += 1;
             }
-            
+
             for &byte in arg.as_bytes() {
                 if pos < 255 {
                     output[pos] = byte;
@@ -414,7 +424,7 @@ impl Terminal {
                 }
             }
         }
-        
+
         let output_str = core::str::from_utf8(&output[..pos]).unwrap_or("");
         self.print_line(output_str);
         Ok(())
@@ -459,7 +469,7 @@ impl Terminal {
         let mut pos = 0;
         let prefix = b"Error: ";
         let message_bytes = message.as_bytes();
-        
+
         // プレフィックスを追加
         for &byte in prefix {
             if pos < 127 {
@@ -467,7 +477,7 @@ impl Terminal {
                 pos += 1;
             }
         }
-        
+
         // メッセージを追加
         for &byte in message_bytes {
             if pos < 127 {
@@ -475,7 +485,7 @@ impl Terminal {
                 pos += 1;
             }
         }
-        
+
         let output_str = core::str::from_utf8(&output[..pos]).unwrap_or("");
         self.print_line(output_str);
     }
@@ -494,7 +504,8 @@ impl Terminal {
 
     /// プロンプトを表示
     pub fn show_prompt(&self) {
-        let prompt = core::str::from_utf8(&self.config.prompt[..self.config.prompt_len as usize]).unwrap_or("");
+        let prompt = core::str::from_utf8(&self.config.prompt[..self.config.prompt_len as usize])
+            .unwrap_or("");
         self.print_line(prompt);
     }
 
@@ -504,14 +515,14 @@ impl Terminal {
             b'\n' | b'\r' => {
                 // エンターキー
                 self.process_command_line();
-            },
+            }
             b'\x08' | b'\x7f' => {
                 // バックスペース
                 if self.cursor_pos > 0 {
                     self.cursor_pos -= 1;
                     self.input_len -= 1;
                 }
-            },
+            }
             _ => {
                 // 通常の文字
                 if self.input_len < 255 {
@@ -532,19 +543,19 @@ impl Terminal {
             let cmd_len = core::cmp::min(self.input_len as usize, 255);
             cmd_buffer[..cmd_len].copy_from_slice(&self.input_buffer[..cmd_len]);
             let cmd_str = core::str::from_utf8(&cmd_buffer[..cmd_len]).unwrap_or("");
-            
+
             // 履歴に追加
             self.add_to_history(cmd_str);
-            
+
             // コマンドを実行
             let _ = self.execute_command(cmd_str);
-            
+
             // 入力バッファをクリア
             self.input_buffer = [0; 256];
             self.input_len = 0;
             self.cursor_pos = 0;
         }
-        
+
         // プロンプトを表示
         self.show_prompt();
     }

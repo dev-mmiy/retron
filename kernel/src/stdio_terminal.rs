@@ -2,8 +2,8 @@
 //!
 //! 標準入出力から入力を受け取り、表示を返すターミナル
 
-use core::option::Option::{self, Some, None};
-use core::result::Result::{self, Ok, Err};
+use core::option::Option::{self, None, Some};
+use core::result::Result::{self, Err, Ok};
 use spin::Mutex;
 
 /// stdioターミナルのエラー
@@ -125,24 +125,24 @@ impl StdioTerminal {
             b'\n' | b'\r' => {
                 // エンターキー
                 self.process_command_line();
-            },
+            }
             b'\x08' | b'\x7f' => {
                 // バックスペース
                 if self.input_len > 0 {
                     self.input_len -= 1;
                 }
-            },
+            }
             b'\x03' => {
                 // Ctrl+C
                 self.print_line("^C");
                 self.clear_input();
                 self.show_prompt();
-            },
+            }
             b'\x04' => {
                 // Ctrl+D
                 self.print_line("^D");
                 return Err(StdioTerminalError::InputError);
-            },
+            }
             _ => {
                 // 通常の文字
                 if self.input_len < 255 {
@@ -162,17 +162,17 @@ impl StdioTerminal {
             let cmd_len = core::cmp::min(self.input_len as usize, 255);
             cmd_buffer[..cmd_len].copy_from_slice(&self.input_buffer[..cmd_len]);
             let command_line = core::str::from_utf8(&cmd_buffer[..cmd_len]).unwrap_or("");
-            
+
             // 履歴に追加
             self.add_to_history(command_line);
-            
+
             // コマンドを実行
             let _ = self.execute_command(command_line);
-            
+
             // 入力バッファをクリア
             self.clear_input();
         }
-        
+
         // プロンプトを表示
         self.show_prompt();
     }
@@ -190,11 +190,10 @@ impl StdioTerminal {
         let mut arg_count = 0;
 
         for part in parts {
-            if !part.is_empty()
-                && arg_count < 8 {
-                    args[arg_count] = part;
-                    arg_count += 1;
-                }
+            if !part.is_empty() && arg_count < 8 {
+                args[arg_count] = part;
+                arg_count += 1;
+            }
         }
 
         if arg_count == 0 {
@@ -223,7 +222,7 @@ impl StdioTerminal {
                 let mut pos = 0;
                 let prefix = b"Command not found: ";
                 let command_bytes = command_name.as_bytes();
-                
+
                 // プレフィックスを追加
                 for &byte in prefix {
                     if pos < 127 {
@@ -231,7 +230,7 @@ impl StdioTerminal {
                         pos += 1;
                     }
                 }
-                
+
                 // コマンド名を追加
                 for &byte in command_bytes {
                     if pos < 127 {
@@ -239,7 +238,7 @@ impl StdioTerminal {
                         pos += 1;
                     }
                 }
-                
+
                 let output_str = core::str::from_utf8(&output[..pos]).unwrap_or("");
                 self.print_error(output_str);
                 Err(StdioTerminalError::CommandNotFound)
@@ -297,7 +296,7 @@ impl StdioTerminal {
             let mut pos = 0;
             let prefix = b"Changed directory to: ";
             let path_bytes = path.as_bytes();
-            
+
             // プレフィックスを追加
             for &byte in prefix {
                 if pos < 63 {
@@ -305,7 +304,7 @@ impl StdioTerminal {
                     pos += 1;
                 }
             }
-            
+
             // パスを追加
             for &byte in path_bytes {
                 if pos < 63 {
@@ -313,7 +312,7 @@ impl StdioTerminal {
                     pos += 1;
                 }
             }
-            
+
             let output_str = core::str::from_utf8(&output[..pos]).unwrap_or("");
             self.print_line(output_str);
         }
@@ -333,7 +332,7 @@ impl StdioTerminal {
         let prefix = b"Contents of ";
         let suffix = b":";
         let filename_bytes = filename.as_bytes();
-        
+
         // プレフィックスを追加
         for &byte in prefix {
             if pos < 63 {
@@ -341,7 +340,7 @@ impl StdioTerminal {
                 pos += 1;
             }
         }
-        
+
         // ファイル名を追加
         for &byte in filename_bytes {
             if pos < 63 {
@@ -349,7 +348,7 @@ impl StdioTerminal {
                 pos += 1;
             }
         }
-        
+
         // サフィックスを追加
         for &byte in suffix {
             if pos < 63 {
@@ -357,7 +356,7 @@ impl StdioTerminal {
                 pos += 1;
             }
         }
-        
+
         let output_str = core::str::from_utf8(&output[..pos]).unwrap_or("");
         self.print_line(output_str);
         self.print_line("  (File contents would be displayed here)");
@@ -369,13 +368,13 @@ impl StdioTerminal {
         // 簡易的な文字列結合
         let mut output = [0u8; 256];
         let mut pos = 0;
-        
+
         for (i, arg) in args.iter().enumerate() {
             if i > 0 && pos < 255 {
                 output[pos] = b' ';
                 pos += 1;
             }
-            
+
             for &byte in arg.as_bytes() {
                 if pos < 255 {
                     output[pos] = byte;
@@ -383,7 +382,7 @@ impl StdioTerminal {
                 }
             }
         }
-        
+
         let output_str = core::str::from_utf8(&output[..pos]).unwrap_or("");
         self.print_line(output_str);
         Ok(())
@@ -433,7 +432,7 @@ impl StdioTerminal {
                 let mut pos = 0;
                 let prefix = b"  ";
                 let entry_bytes = entry_str.as_bytes();
-                
+
                 // プレフィックスを追加
                 for &byte in prefix {
                     if pos < 127 {
@@ -441,7 +440,7 @@ impl StdioTerminal {
                         pos += 1;
                     }
                 }
-                
+
                 // 履歴番号を追加
                 let history_num = i + 1;
                 if history_num < 10 {
@@ -453,13 +452,13 @@ impl StdioTerminal {
                     output[pos] = b'0' + (history_num - 10) as u8;
                     pos += 1;
                 }
-                
+
                 // コロンを追加
                 output[pos] = b':';
                 pos += 1;
                 output[pos] = b' ';
                 pos += 1;
-                
+
                 // エントリを追加
                 for &byte in entry_bytes {
                     if pos < 127 {
@@ -467,7 +466,7 @@ impl StdioTerminal {
                         pos += 1;
                     }
                 }
-                
+
                 let output_str = core::str::from_utf8(&output[..pos]).unwrap_or("");
                 self.print_line(output_str);
             }
@@ -500,7 +499,7 @@ impl StdioTerminal {
         let mut pos = 0;
         let prefix = b"Error: ";
         let message_bytes = message.as_bytes();
-        
+
         // プレフィックスを追加
         for &byte in prefix {
             if pos < 127 {
@@ -508,7 +507,7 @@ impl StdioTerminal {
                 pos += 1;
             }
         }
-        
+
         // メッセージを追加
         for &byte in message_bytes {
             if pos < 127 {
@@ -516,7 +515,7 @@ impl StdioTerminal {
                 pos += 1;
             }
         }
-        
+
         let output_str = core::str::from_utf8(&output[..pos]).unwrap_or("");
         self.print_line(output_str);
     }
@@ -547,7 +546,10 @@ pub fn get_stdio_terminal() -> StdioTerminalResult<&'static mut StdioTerminal> {
     // Note: This returns a reference that outlives the MutexGuard
     // In a real implementation, this would need proper lifetime management
     unsafe {
-        let ptr = STDIO_TERMINAL.lock().as_mut().ok_or(StdioTerminalError::SystemError)? as *mut StdioTerminal;
+        let ptr = STDIO_TERMINAL
+            .lock()
+            .as_mut()
+            .ok_or(StdioTerminalError::SystemError)? as *mut StdioTerminal;
         Ok(&mut *ptr)
     }
 }
@@ -559,7 +561,7 @@ pub fn run_stdio_terminal() -> StdioTerminalResult<()> {
     }
 
     let terminal = get_stdio_terminal()?;
-    
+
     // デモンストレーションコマンドの実行
     let _ = terminal.execute_command("help");
     let _ = terminal.execute_command("version");
@@ -571,7 +573,7 @@ pub fn run_stdio_terminal() -> StdioTerminalResult<()> {
     let _ = terminal.execute_command("date");
     let _ = terminal.execute_command("uptime");
     let _ = terminal.execute_command("history");
-    
+
     Ok(())
 }
 
@@ -582,11 +584,11 @@ pub fn run_stdio_shell() -> StdioTerminalResult<()> {
     }
 
     let terminal = get_stdio_terminal()?;
-    
+
     // シェル用のデモンストレーション
     let _ = terminal.execute_command("echo Starting stdio shell...");
     let _ = terminal.execute_command("info");
     let _ = terminal.execute_command("ls");
-    
+
     Ok(())
 }

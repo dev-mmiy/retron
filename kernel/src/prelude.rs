@@ -2,19 +2,19 @@
 
 // 基本的な型の再エクスポート
 pub use core::option::Option;
+pub use core::option::Option::{None, Some};
 pub use core::result::Result;
-pub use core::option::Option::{Some, None};
-pub use core::result::Result::{Ok, Err};
+pub use core::result::Result::{Err, Ok};
 
 // 基本的なマクロ
 pub use core::concat;
 pub use core::write;
 
 // 基本的なトレイト
-pub use core::default::Default;
-pub use core::marker::{Sized, Send, Sync};
 pub use core::cmp::{PartialEq, PartialOrd};
+pub use core::default::Default;
 pub use core::iter::Iterator;
+pub use core::marker::{Send, Sized, Sync};
 
 // アロケーション関連
 pub use core::alloc::{GlobalAlloc, Layout};

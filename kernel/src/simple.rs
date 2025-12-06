@@ -14,10 +14,11 @@ static mut CURSOR_POS: usize = 0;
 /// 文字列をVGAバッファに出力（シンプル版）
 pub fn print(text: &str) {
     let vga_buffer = 0xB8000 as *mut u16;
-    
+
     unsafe {
         for &byte in text.as_bytes().iter() {
-            if CURSOR_POS < 2000 { // VGA画面の最大文字数 (25行 * 80列)
+            if CURSOR_POS < 2000 {
+                // VGA画面の最大文字数 (25行 * 80列)
                 if byte == b'\n' {
                     // 改行処理：次の行の開始位置に移動
                     CURSOR_POS = ((CURSOR_POS / 80) + 1) * 80;

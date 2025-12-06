@@ -1,8 +1,8 @@
 //! ターミナルのテスト機能
 
-use core::option::Option::{Some, None};
-use core::result::Result::{Ok, Err};
 use crate::terminal::*;
+use core::option::Option::{None, Some};
+use core::result::Result::{Err, Ok};
 
 /// ターミナルのテストを実行
 pub fn test_terminal() -> bool {
@@ -43,43 +43,43 @@ fn test_basic_commands() -> bool {
 
     // help コマンドのテスト
     match terminal.execute_command("help") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     // version コマンドのテスト
     match terminal.execute_command("version") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     // info コマンドのテスト
     match terminal.execute_command("info") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     // ls コマンドのテスト
     match terminal.execute_command("ls") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     // pwd コマンドのテスト
     match terminal.execute_command("pwd") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     // echo コマンドのテスト
     match terminal.execute_command("echo Hello, World!") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     // clear コマンドのテスト
     match terminal.execute_command("clear") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
@@ -95,18 +95,20 @@ fn test_command_registration() -> bool {
 
     // 新しいコマンドを登録
     match terminal.register_command("test", CommandType::Builtin, "Test command") {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     // 登録されたコマンドを検索
     match terminal.find_command("test") {
-        Some(_) => {},
+        Some(_) => {}
         None => return false,
     }
 
     // 存在しないコマンドを検索
-    if terminal.find_command("nonexistent").is_some() { return false }
+    if terminal.find_command("nonexistent").is_some() {
+        return false;
+    }
 
     true
 }
@@ -120,39 +122,39 @@ fn test_input_processing() -> bool {
 
     // 通常の文字入力
     match terminal.process_input(b'h') {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     match terminal.process_input(b'e') {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     match terminal.process_input(b'l') {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     match terminal.process_input(b'l') {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     match terminal.process_input(b'o') {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     // バックスペース
     match terminal.process_input(b'\x08') {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
     // エンターキー
     match terminal.process_input(b'\n') {
-        Ok(_) => {},
+        Ok(_) => {}
         Err(_) => return false,
     }
 
@@ -237,11 +239,10 @@ pub fn test_terminal_performance() -> bool {
     }
 
     // 履歴の確認
-    if terminal.history_count < 16 { // 最大履歴数
+    if terminal.history_count < 16 {
+        // 最大履歴数
         return false;
     }
 
     true
 }
-
-

@@ -1,7 +1,7 @@
 //! ターミナルのデモンストレーション機能
 
-use core::result::Result::{Ok, Err};
 use crate::terminal::*;
+use core::result::Result::{Err, Ok};
 
 /// ターミナルのデモンストレーション
 pub fn terminal_demo() {
@@ -25,10 +25,10 @@ fn demo_basic_commands() {
 
     // help コマンドのデモ
     let _ = terminal.execute_command("help");
-    
+
     // version コマンドのデモ
     let _ = terminal.execute_command("version");
-    
+
     // info コマンドのデモ
     let _ = terminal.execute_command("info");
 }
@@ -42,16 +42,16 @@ fn demo_advanced_commands() {
 
     // ls コマンドのデモ
     let _ = terminal.execute_command("ls");
-    
+
     // pwd コマンドのデモ
     let _ = terminal.execute_command("pwd");
-    
+
     // cd コマンドのデモ
     let _ = terminal.execute_command("cd /home");
-    
+
     // echo コマンドのデモ
     let _ = terminal.execute_command("echo Hello, Retron OS!");
-    
+
     // cat コマンドのデモ
     let _ = terminal.execute_command("cat /etc/retron.conf");
 }
@@ -65,7 +65,7 @@ fn demo_terminal_features() {
 
     // clear コマンドのデモ
     let _ = terminal.execute_command("clear");
-    
+
     // 複数のコマンドを実行して履歴に追加
     let commands = [
         "help",
@@ -96,10 +96,10 @@ pub fn terminal_detailed_demo() {
 
     // 複雑なコマンドシーケンスの実行
     execute_complex_command_sequence(terminal);
-    
+
     // カスタムコマンドの登録と実行
     register_and_execute_custom_commands(terminal);
-    
+
     // ターミナル機能の詳細デモ
     demonstrate_terminal_features(terminal);
 }
@@ -142,14 +142,7 @@ fn demonstrate_terminal_features(terminal: &mut Terminal) {
     }
 
     // 履歴機能のデモ
-    let history_commands = [
-        "help",
-        "version",
-        "info",
-        "ls",
-        "pwd",
-        "echo History Demo",
-    ];
+    let history_commands = ["help", "version", "info", "ls", "pwd", "echo History Demo"];
 
     for command in &history_commands {
         let _ = terminal.execute_command(command);
@@ -213,5 +206,3 @@ pub fn terminal_interactive_demo() {
         let _ = terminal.execute_command(command);
     }
 }
-
-
