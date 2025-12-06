@@ -30,5 +30,6 @@ Thumbs.db
 # T-Kernel (third party)
 third_party/
 
-# Logs
+# Logs and temporary files
 *.log
+build_output.txt
