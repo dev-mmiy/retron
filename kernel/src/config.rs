@@ -59,6 +59,12 @@ pub struct ConfigManager {
     pub program_count: u8,
 }
 
+impl Default for ConfigManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConfigManager {
     /// 新しい設定マネージャーを作成
     pub fn new() -> Self {
@@ -82,7 +88,7 @@ impl ConfigManager {
             programs: [None; 16],
             program_count: 0,
         };
-        
+
         // デフォルトプログラムを登録
         manager.register_default_programs();
         manager
@@ -187,12 +193,7 @@ impl ConfigManager {
         if len1 != str2.len() {
             return false;
         }
-        for i in 0..len1 {
-            if str1[i] != str2.as_bytes()[i] {
-                return false;
-            }
-        }
-        true
+        str1.iter().take(len1).zip(str2.as_bytes()).all(|(a, b)| a == b)
     }
 
     /// 設定を初期化

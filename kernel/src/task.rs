@@ -46,6 +46,12 @@ pub struct TaskManager {
     next_task_id: AtomicUsize,
 }
 
+impl Default for TaskManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskManager {
     /// 新しいタスクマネージャーを作成
     pub fn new() -> Self {

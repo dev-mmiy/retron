@@ -18,6 +18,12 @@ pub struct InterruptManager {
     idt: InterruptDescriptorTable,
 }
 
+impl Default for InterruptManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InterruptManager {
     /// 新しい割り込みマネージャーを作成
     pub fn new() -> Self {

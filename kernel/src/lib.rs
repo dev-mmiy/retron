@@ -31,15 +31,23 @@ pub const UTKERNEL_VERSION: &str = "3.0";
 /// パニックハンドラー
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    // パニック時の処理
-    loop {}
+    // パニック時の処理 - CPUをhltで停止
+    loop {
+        unsafe {
+            core::arch::asm!("hlt");
+        }
+    }
 }
 
 /// アロケーションハンドラー
 #[alloc_error_handler]
 fn alloc_error(_layout: core::alloc::Layout) -> ! {
-    // メモリ不足時の処理
-    loop {}
+    // メモリ不足時の処理 - CPUをhltで停止
+    loop {
+        unsafe {
+            core::arch::asm!("hlt");
+        }
+    }
 }
 
 /// カーネル初期化

@@ -84,6 +84,12 @@ pub struct InitConfigParser {
     pub log_config: LogConfig,
 }
 
+impl Default for InitConfigParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InitConfigParser {
     /// 新しいinit.configパーサーを作成
     pub fn new() -> Self {
@@ -639,11 +645,9 @@ pub fn execute_startup_sequence() -> InitConfigResult<()> {
     let parser = get_config_parser()?;
     let startup_sequence = parser.get_startup_sequence();
     
-    for startup_program in startup_sequence {
-        if let Some(program_name) = startup_program {
-            let program_str = core::str::from_utf8(program_name).unwrap_or("");
-            execute_program(program_str)?;
-        }
+    for program_name in startup_sequence.iter().flatten() {
+        let program_str = core::str::from_utf8(program_name).unwrap_or("");
+        execute_program(program_str)?;
     }
     
     Ok(())

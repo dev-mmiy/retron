@@ -75,6 +75,12 @@ pub struct Terminal {
     pub command_count: u8,
 }
 
+impl Default for Terminal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Terminal {
     /// 新しいターミナルを作成
     pub fn new() -> Self {
@@ -103,7 +109,7 @@ impl Terminal {
             commands: [None; 32],
             command_count: 0,
         };
-        
+
         // デフォルトコマンドを登録
         terminal.register_default_commands();
         terminal
@@ -200,12 +206,7 @@ impl Terminal {
         if len1 != str2.len() {
             return false;
         }
-        for i in 0..len1 {
-            if str1[i] != str2.as_bytes()[i] {
-                return false;
-            }
-        }
-        true
+        str1.iter().take(len1).zip(str2.as_bytes()).all(|(a, b)| a == b)
     }
 
     /// コマンドを実行
@@ -215,12 +216,11 @@ impl Terminal {
         let mut arg_count = 0;
 
         for part in parts {
-            if !part.is_empty() {
-                if arg_count < 8 {
+            if !part.is_empty()
+                && arg_count < 8 {
                     args[arg_count] = part;
                     arg_count += 1;
                 }
-            }
         }
 
         if arg_count == 0 {
@@ -530,9 +530,7 @@ impl Terminal {
             // コマンドラインをコピー
             let mut cmd_buffer = [0u8; 256];
             let cmd_len = core::cmp::min(self.input_len as usize, 255);
-            for i in 0..cmd_len {
-                cmd_buffer[i] = self.input_buffer[i];
-            }
+            cmd_buffer[..cmd_len].copy_from_slice(&self.input_buffer[..cmd_len]);
             let cmd_str = core::str::from_utf8(&cmd_buffer[..cmd_len]).unwrap_or("");
             
             // 履歴に追加
@@ -557,9 +555,7 @@ impl Terminal {
             let history_entry = &mut self.history[self.history_count as usize];
             let bytes = command_line.as_bytes();
             let len = core::cmp::min(bytes.len(), 255);
-            for i in 0..len {
-                history_entry[i] = bytes[i];
-            }
+            history_entry[..len].copy_from_slice(&bytes[..len]);
             self.history_count += 1;
         }
     }

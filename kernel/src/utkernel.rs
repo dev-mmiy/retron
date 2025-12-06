@@ -31,6 +31,12 @@ pub struct UTKernelLayer {
     next_pool_id: usize,
 }
 
+impl Default for UTKernelLayer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UTKernelLayer {
     /// 新しいμT-Kernel互換レイヤーを作成
     pub fn new() -> Self {

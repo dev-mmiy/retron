@@ -146,10 +146,7 @@ fn test_integrity_check() -> bool {
     };
 
     // 整合性チェックの実行
-    match fs.check_integrity() {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    fs.check_integrity().is_ok()
 }
 
 /// ファイルシステムの詳細テスト
@@ -179,10 +176,8 @@ pub fn test_filesystem_detailed() -> bool {
             if fs.create_file(path, FilePermissions::default()).is_err() {
                 return false;
             }
-        } else {
-            if fs.create_directory(path, FilePermissions::default()).is_err() {
-                return false;
-            }
+        } else if fs.create_directory(path, FilePermissions::default()).is_err() {
+            return false;
         }
     }
 

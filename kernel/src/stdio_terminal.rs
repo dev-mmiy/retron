@@ -43,6 +43,12 @@ pub struct StdioTerminal {
     pub history_index: u8,
 }
 
+impl Default for StdioTerminal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StdioTerminal {
     /// 新しいstdioターミナルを作成
     pub fn new() -> Self {
@@ -88,9 +94,7 @@ impl StdioTerminal {
         // プロンプトをコピーして借用チェッカーの問題を回避
         let mut prompt_buffer = [0u8; 32];
         let prompt_len = self.prompt_len as usize;
-        for i in 0..prompt_len {
-            prompt_buffer[i] = self.prompt[i];
-        }
+        prompt_buffer[..prompt_len].copy_from_slice(&self.prompt[..prompt_len]);
         let prompt = core::str::from_utf8(&prompt_buffer[..prompt_len]).unwrap_or("");
         self.print(prompt);
     }
@@ -156,9 +160,7 @@ impl StdioTerminal {
             // コマンドラインをコピーして借用チェッカーの問題を回避
             let mut cmd_buffer = [0u8; 256];
             let cmd_len = core::cmp::min(self.input_len as usize, 255);
-            for i in 0..cmd_len {
-                cmd_buffer[i] = self.input_buffer[i];
-            }
+            cmd_buffer[..cmd_len].copy_from_slice(&self.input_buffer[..cmd_len]);
             let command_line = core::str::from_utf8(&cmd_buffer[..cmd_len]).unwrap_or("");
             
             // 履歴に追加
@@ -188,12 +190,11 @@ impl StdioTerminal {
         let mut arg_count = 0;
 
         for part in parts {
-            if !part.is_empty() {
-                if arg_count < 8 {
+            if !part.is_empty()
+                && arg_count < 8 {
                     args[arg_count] = part;
                     arg_count += 1;
                 }
-            }
         }
 
         if arg_count == 0 {
@@ -526,9 +527,7 @@ impl StdioTerminal {
             let history_entry = &mut self.history[self.history_count as usize];
             let bytes = command_line.as_bytes();
             let len = core::cmp::min(bytes.len(), 255);
-            for i in 0..len {
-                history_entry[i] = bytes[i];
-            }
+            history_entry[..len].copy_from_slice(&bytes[..len]);
             self.history_count += 1;
         }
     }
