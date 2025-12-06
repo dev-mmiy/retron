@@ -3,6 +3,7 @@
 use core::arch::asm;
 
 /// シンプルなHello World表示
+#[allow(dead_code)]
 pub fn simple_hello() {
     println("Hello, Retron OS!");
 }
@@ -43,6 +44,7 @@ pub fn serial_print(text: &str) {
 }
 
 /// シリアルポートの初期化（簡易版）
+#[allow(dead_code)]
 pub fn init_serial() {
     // WSL環境ではシリアルポートが制限されるため、何もしない
 }
@@ -54,6 +56,7 @@ pub fn serial_println(text: &str) {
 }
 
 /// システム停止
+#[allow(dead_code)]
 pub fn halt() {
     loop {
         unsafe {
