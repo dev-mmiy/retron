@@ -22,7 +22,7 @@ pub type TaskPriority = u8;
 pub type TaskId = usize;
 
 /// タスク構造体
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub struct Task {
     pub id: TaskId,
     pub state: TaskState,
@@ -30,6 +30,13 @@ pub struct Task {
     pub stack_pointer: usize,
     pub stack_size: usize,
     pub entry_point: fn(),
+}
+
+impl PartialEq for Task {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare tasks by ID only, as function pointers are not reliably comparable
+        self.id == other.id
+    }
 }
 
 /// タスク管理

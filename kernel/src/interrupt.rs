@@ -106,6 +106,7 @@ extern "x86-interrupt" fn serial_interrupt_handler(_stack_frame: InterruptStackF
 }
 
 /// 汎用割り込みハンドラー
+#[allow(dead_code)]
 extern "x86-interrupt" fn generic_interrupt_handler(_stack_frame: InterruptStackFrame) {
     // 汎用割り込みの処理
     // TODO: 割り込み番号に応じた処理
