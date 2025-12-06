@@ -106,10 +106,7 @@ fn test_command_registration() -> bool {
     }
 
     // 存在しないコマンドを検索
-    match terminal.find_command("nonexistent") {
-        Some(_) => return false,
-        None => {},
-    }
+    if terminal.find_command("nonexistent").is_some() { return false }
 
     true
 }

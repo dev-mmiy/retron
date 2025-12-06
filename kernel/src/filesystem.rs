@@ -113,6 +113,12 @@ pub struct FileSystem {
     pub stats: FSStats,
 }
 
+impl Default for FileSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileSystem {
     /// 新しいファイルシステムを作成
     pub fn new() -> Self {
@@ -129,7 +135,7 @@ impl FileSystem {
                 free_nodes: 1024,
             },
         };
-        
+
         // ルートディレクトリを作成
         fs.create_root_directory();
         fs

@@ -33,11 +33,8 @@ fn demo_basic_operations() {
     }
 
     // ディレクトリの作成
-    match fs.create_directory("/documents", FilePermissions::default()) {
-        Ok(_id) => {
-            // ディレクトリ作成成功
-        },
-        Err(_) => return,
+    if let Ok(_id) = fs.create_directory("/documents", FilePermissions::default()) {
+        // ディレクトリ作成成功
     }
 }
 
