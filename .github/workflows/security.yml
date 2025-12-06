@@ -1,0 +1,49 @@
+name: Security Scan
+
+on:
+  schedule:
+    # 毎週日曜日 0:00 UTC に実行
+    - cron: '0 0 * * 0'
+  workflow_dispatch:  # 手動実行を許可
+  push:
+    branches: [ main ]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+
+jobs:
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run security audit
+        run: |
+          cd kernel
+          cargo audit
+
+      - name: Check for known vulnerabilities
+        run: |
+          cd kernel
+          if cargo audit --json > audit-report.json; then
+            echo "✅ No known vulnerabilities found"
+          else
+            echo "⚠️ Security vulnerabilities detected!"
+            cat audit-report.json
+            exit 1
+          fi
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-audit-report
+          path: kernel/audit-report.json
+          retention-days: 30

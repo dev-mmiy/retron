@@ -1,5 +1,9 @@
 # Retron OS
 
+[![CI/CD Pipeline](https://github.com/dev-mmiy/retron/workflows/CI%2FCD%20Pipeline/badge.svg)](https://github.com/dev-mmiy/retron/actions/workflows/ci.yml)
+[![Security Scan](https://github.com/dev-mmiy/retron/workflows/Security%20Scan/badge.svg)](https://github.com/dev-mmiy/retron/actions/workflows/security.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 TRONベースのモダンOSプロジェクト
 
 ## 概要

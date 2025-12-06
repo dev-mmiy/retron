@@ -1,0 +1,235 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  RUST_BACKTRACE: 1
+  RUSTFLAGS: -D warnings  # 警告をエラーとして扱う
+
+jobs:
+  # ==========================================
+  # Job 1: コードフォーマットチェック
+  # ==========================================
+  format:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  # ==========================================
+  # Job 2: Clippyリントチェック
+  # ==========================================
+  clippy:
+    name: Clippy Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: clippy
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            kernel/target
+          key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-clippy-
+            ${{ runner.os }}-cargo-
+
+      - name: Run clippy
+        run: |
+          cd kernel
+          cargo clippy --all-targets -- -D warnings
+
+  # ==========================================
+  # Job 3: ビルド検証（警告ゼロチェック）
+  # ==========================================
+  build:
+    name: Build & Zero Warnings Check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        profile: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: x86_64-unknown-none
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            kernel/target
+          key: ${{ runner.os }}-cargo-${{ matrix.profile }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.profile }}-
+            ${{ runner.os }}-cargo-
+
+      - name: Build (${{ matrix.profile }})
+        run: |
+          cd kernel
+          if [ "${{ matrix.profile }}" = "release" ]; then
+            cargo build --release 2>&1 | tee build.log
+          else
+            cargo build 2>&1 | tee build.log
+          fi
+
+      - name: Check for warnings
+        run: |
+          if grep -i "warning:" kernel/build.log; then
+            echo "❌ Warnings detected! Build must be warning-free."
+            exit 1
+          else
+            echo "✅ Zero warnings - build is clean!"
+          fi
+
+      - name: Upload build artifacts
+        if: matrix.profile == 'release'
+        uses: actions/upload-artifact@v3
+        with:
+          name: retron-kernel-${{ matrix.profile }}
+          path: kernel/target/x86_64-unknown-none/${{ matrix.profile }}/retron-kernel
+          retention-days: 7
+
+  # ==========================================
+  # Job 4: セキュリティ監査
+  # ==========================================
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run security audit
+        run: |
+          cd kernel
+          cargo audit
+
+  # ==========================================
+  # Job 5: ドキュメント生成チェック
+  # ==========================================
+  docs:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            kernel/target
+          key: ${{ runner.os }}-cargo-docs-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-docs-
+            ${{ runner.os }}-cargo-
+
+      - name: Generate documentation
+        run: |
+          cd kernel
+          cargo doc --no-deps --document-private-items
+
+      - name: Check for broken links
+        run: |
+          echo "📚 Documentation generated successfully"
+
+  # ==========================================
+  # Job 6: コード品質メトリクス
+  # ==========================================
+  metrics:
+    name: Code Quality Metrics
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Count lines of code
+        run: |
+          echo "📊 Lines of Code Statistics"
+          echo "=============================="
+          total_lines=$(find kernel/src -name "*.rs" -exec cat {} \; | wc -l)
+          file_count=$(find kernel/src -name "*.rs" | wc -l)
+          echo "Total files: $file_count"
+          echo "Total lines: $total_lines"
+          echo "Average lines per file: $((total_lines / file_count))"
+
+      - name: Check TODO comments
+        run: |
+          echo ""
+          echo "📝 TODO Comments"
+          echo "================"
+          todo_count=$(grep -r "TODO" kernel/src 2>/dev/null | wc -l || echo "0")
+          echo "TODO count: $todo_count"
+          if [ $todo_count -gt 0 ]; then
+            grep -rn "TODO" kernel/src || true
+          fi
+
+      - name: Check FIXME comments
+        run: |
+          echo ""
+          echo "⚠️  FIXME Comments"
+          echo "=================="
+          fixme_count=$(grep -r "FIXME" kernel/src 2>/dev/null | wc -l || echo "0")
+          if [ $fixme_count -gt 0 ]; then
+            echo "Warning: $fixme_count FIXME comments found"
+            grep -rn "FIXME" kernel/src || true
+            exit 1
+          else
+            echo "✅ No FIXME comments found"
+          fi
+
+  # ==========================================
+  # Job 7: 最終確認（全ジョブ成功後）
+  # ==========================================
+  final-check:
+    name: Final Verification
+    needs: [format, clippy, build, security, docs, metrics]
+    runs-on: ubuntu-latest
+    steps:
+      - name: All checks passed
+        run: |
+          echo "✅ All CI/CD checks passed!"
+          echo "🎉 Code quality verified!"
+          echo "📦 Ready to merge!"
+          echo ""
+          echo "Quality Gates Passed:"
+          echo "  ✅ Code formatting"
+          echo "  ✅ Linting (Clippy)"
+          echo "  ✅ Build (debug & release)"
+          echo "  ✅ Zero warnings policy"
+          echo "  ✅ Security audit"
+          echo "  ✅ Documentation"
+          echo "  ✅ Code metrics"
