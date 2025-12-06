@@ -1,9 +1,10 @@
 //! stdio対応ターミナル
-//! 
+//!
 //! 標準入出力から入力を受け取り、表示を返すターミナル
 
 use core::option::Option::{self, Some, None};
 use core::result::Result::{self, Ok, Err};
+use spin::Mutex;
 
 /// stdioターミナルのエラー
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -534,20 +535,21 @@ impl StdioTerminal {
 }
 
 /// stdioターミナルのグローバルインスタンス
-static mut STDIO_TERMINAL: Option<StdioTerminal> = None;
+static STDIO_TERMINAL: Mutex<Option<StdioTerminal>> = Mutex::new(None);
 
 /// stdioターミナルを初期化
 pub fn init_stdio_terminal() -> StdioTerminalResult<()> {
-    unsafe {
-        STDIO_TERMINAL = Some(StdioTerminal::new());
-        STDIO_TERMINAL.as_mut().unwrap().init()
-    }
+    *STDIO_TERMINAL.lock() = Some(StdioTerminal::new());
+    STDIO_TERMINAL.lock().as_mut().unwrap().init()
 }
 
 /// stdioターミナルのインスタンスを取得
 pub fn get_stdio_terminal() -> StdioTerminalResult<&'static mut StdioTerminal> {
+    // Note: This returns a reference that outlives the MutexGuard
+    // In a real implementation, this would need proper lifetime management
     unsafe {
-        STDIO_TERMINAL.as_mut().ok_or(StdioTerminalError::SystemError)
+        let ptr = STDIO_TERMINAL.lock().as_mut().ok_or(StdioTerminalError::SystemError)? as *mut StdioTerminal;
+        Ok(&mut *ptr)
     }
 }
 

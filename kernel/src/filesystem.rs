@@ -1,5 +1,5 @@
 //! Retron OS ファイルシステム
-//! 
+//!
 //! シンプルなファイルシステムを実装
 //! - ディレクトリ構造
 //! - ファイル操作
@@ -7,6 +7,7 @@
 
 use core::option::Option::{self, Some, None};
 use core::result::Result::{self, Ok, Err};
+use spin::Mutex;
 
 /// ファイルシステムのエラー
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -380,25 +381,26 @@ impl FileSystem {
 }
 
 /// ファイルシステムのグローバルインスタンス
-static mut FILESYSTEM: Option<FileSystem> = None;
+static FILESYSTEM: Mutex<Option<FileSystem>> = Mutex::new(None);
 
 /// ファイルシステムを初期化
 pub fn init_filesystem() -> FSResult<()> {
-    unsafe {
-        // デバッグ出力
-        crate::simple::serial_println("DEBUG: Creating new FileSystem");
-        FILESYSTEM = Some(FileSystem::new());
-        crate::simple::serial_println("DEBUG: FileSystem created, calling init()");
-        let result = FILESYSTEM.as_mut().unwrap().init();
-        crate::simple::serial_println("DEBUG: FileSystem init() completed");
-        result
-    }
+    // デバッグ出力
+    crate::simple::serial_println("DEBUG: Creating new FileSystem");
+    *FILESYSTEM.lock() = Some(FileSystem::new());
+    crate::simple::serial_println("DEBUG: FileSystem created, calling init()");
+    let result = FILESYSTEM.lock().as_mut().unwrap().init();
+    crate::simple::serial_println("DEBUG: FileSystem init() completed");
+    result
 }
 
 /// ファイルシステムのインスタンスを取得
 pub fn get_filesystem() -> FSResult<&'static mut FileSystem> {
+    // Note: This returns a reference that outlives the MutexGuard
+    // In a real implementation, this would need proper lifetime management
     unsafe {
-        FILESYSTEM.as_mut().ok_or(FSError::Corrupted)
+        let ptr = FILESYSTEM.lock().as_mut().ok_or(FSError::Corrupted)? as *mut FileSystem;
+        Ok(&mut *ptr)
     }
 }
 
