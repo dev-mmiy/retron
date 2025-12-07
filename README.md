@@ -1,5 +1,9 @@
 # Retron OS
 
+![CI/CD](https://github.com/dev-mmiy/retron/workflows/CI%2FCD%20Pipeline/badge.svg)
+![Code Quality](https://img.shields.io/badge/warnings-0-brightgreen)
+![Rust](https://img.shields.io/badge/rust-nightly-orange)
+
 TRONベースのモダンOSプロジェクト
 
 ## 概要
@@ -7,9 +11,10 @@ TRONベースのモダンOSプロジェクト
 Retron OSは、μT-Kernel 3.xをベースとしたモダンなオペレーティングシステムです。以下の特徴を持ちます：
 
 - **ベース**: μT-Kernel 3.x
-- **実装言語**: Rust
+- **実装言語**: Rust (nightly)
 - **対象プラットフォーム**: Laptop, モバイル, ロボット制御
 - **アーキテクチャ**: モジュラー設計
+- **コード品質**: ✨ **ゼロ警告達成**
 
 ## 特徴
 
@@ -77,32 +82,86 @@ make build
 make run-qemu
 ```
 
+## コード品質
+
+### ✨ ゼロ警告達成
+
+Retron OSは**コンパイラ警告ゼロ**を達成し、維持しています。
+
+| 指標 | 状態 |
+|------|------|
+| Clippy警告 | ✅ **0個** |
+| Rust Edition | ✅ 2024対応 |
+| CI/CD | ✅ 自動チェック |
+| フォーマット | ✅ 統一済み |
+
+### 🔍 品質方針
+
+- **ローカルファースト**: 開発者がローカルで品質チェックを実行
+- **厳格なCI/CD**: GitHub上で必須3チェック（Format, Clippy, Build）
+- **RUSTFLAGS=-D warnings**: すべての警告をエラーとして扱う
+
 ## 開発
+
+### ローカル開発環境のセットアップ
+
+```bash
+# Rust nightlyのインストール
+rustup default nightly
+rustup component add rustfmt clippy
+
+# ターゲットの追加
+rustup target add x86_64-unknown-none
+```
+
+### ビルド前のチェック（必須）
+
+**プッシュ前に必ず実行：**
+
+```bash
+cd kernel
+
+# 1. フォーマット
+cargo fmt --all
+
+# 2. Clippyチェック（ゼロ警告必須）
+cargo clippy --lib --bins -- -D warnings
+
+# 3. リリースビルド
+cargo build --release --target x86_64-unknown-none
+```
+
+**クイックチェック（一括実行）:**
+
+```bash
+cd kernel && \
+  cargo fmt --all && \
+  cargo clippy --lib --bins -- -D warnings && \
+  cargo build --release --target x86_64-unknown-none
+```
 
 ### ビルド
 
 ```bash
+# カーネルのビルド
+cd kernel
+cargo build --release --target x86_64-unknown-none
+
 # 全プロジェクトをビルド
 make build
-
-# 個別レイヤーをビルド
-cd kernel && cargo build --release
-cd core && cargo build --release
-cd ui && cargo build --release
-cd robot && cargo build --release
 ```
 
 ### テスト
 
-```bash
-# 全テストを実行
-make test
+**注意**: `no_std`カーネルのため、標準的な`cargo test`は使用できません。
 
-# 個別レイヤーのテスト
-cd kernel && cargo test
-cd core && cargo test
-cd ui && cargo test
-cd robot && cargo test
+```bash
+# QEMUで統合テスト
+make run-qemu
+
+# ビルドの検証
+cd kernel
+cargo build --release --target x86_64-unknown-none
 ```
 
 ### デバッグ
