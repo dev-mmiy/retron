@@ -3,6 +3,8 @@
 //! μT-Kernel 3.xベースのモダンカーネル実装
 
 #![no_std]
+#![cfg(not(test))]
+// no_std環境では標準のtestクレートが利用できないため、テストビルドを無効化
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 
@@ -13,6 +15,7 @@ pub mod fs_demo;
 pub mod fs_test;
 pub mod init_config;
 pub mod interrupt;
+pub mod kernel_test;
 pub mod memory;
 pub mod prelude;
 pub mod simple;
@@ -21,7 +24,6 @@ pub mod task;
 pub mod terminal;
 pub mod terminal_demo;
 pub mod terminal_test;
-pub mod test;
 pub mod utkernel;
 
 /// カーネルバージョン情報

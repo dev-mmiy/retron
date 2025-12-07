@@ -1,5 +1,7 @@
 #![no_std]
 #![no_main]
+#![cfg(not(test))]
+// no_std環境では標準のtestクレートが利用できないため、テストビルドを無効化
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 
@@ -16,6 +18,8 @@ mod fs_demo;
 mod fs_test;
 #[allow(dead_code)]
 mod init_config;
+#[allow(dead_code)]
+mod kernel_test;
 mod simple;
 #[allow(dead_code)]
 mod stdio_terminal;
@@ -25,8 +29,6 @@ mod terminal;
 mod terminal_demo;
 #[allow(dead_code)]
 mod terminal_test;
-#[allow(dead_code)]
-mod test;
 
 /// カーネルエントリーポイント（Multiboot対応）
 #[no_mangle]

@@ -3,9 +3,13 @@ name = "retron-kernel"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+test = false
+
 [[bin]]
 name = "retron-kernel"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 # カーネル用のno_std環境
