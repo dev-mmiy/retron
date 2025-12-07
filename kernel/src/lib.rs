@@ -11,19 +11,14 @@
 pub mod config;
 pub mod device;
 pub mod filesystem;
-pub mod fs_demo;
-pub mod fs_test;
 pub mod init_config;
 pub mod interrupt;
-pub mod kernel_test;
 pub mod memory;
 pub mod prelude;
 pub mod simple;
 pub mod stdio_terminal;
 pub mod task;
 pub mod terminal;
-pub mod terminal_demo;
-pub mod terminal_test;
 pub mod utkernel;
 
 /// カーネルバージョン情報

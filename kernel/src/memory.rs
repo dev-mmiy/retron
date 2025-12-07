@@ -83,7 +83,7 @@ impl SystemMemory {
     pub fn get_info() -> Self {
         Self {
             total: HEAP_SIZE,
-            used: 0, // TODO: 実際の使用量を計算
+            used: 0, // TODO(Phase 2): 実際の使用量を計算
             free: HEAP_SIZE,
         }
     }

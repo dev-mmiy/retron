@@ -79,7 +79,7 @@ impl TaskManager {
             id: task_id,
             state: TaskState::Ready,
             priority,
-            stack_pointer: 0, // TODO: スタック領域の割り当て
+            stack_pointer: 0, // TODO(Phase 2): スタック領域の割り当て
             stack_size,
             entry_point,
         };

@@ -104,24 +104,24 @@ pub fn register_handler(interrupt_number: InterruptNumber, handler: InterruptHan
 /// タイマー割り込みハンドラー
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
     // タイマー割り込みの処理
-    // TODO: タスクスケジューリングのトリガー
+    // TODO(Phase 2): タスクスケジューリングのトリガー
 }
 
 /// キーボード割り込みハンドラー
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     // キーボード割り込みの処理
-    // TODO: キー入力の処理
+    // TODO(Phase 4): キー入力の処理
 }
 
 /// シリアル割り込みハンドラー
 extern "x86-interrupt" fn serial_interrupt_handler(_stack_frame: InterruptStackFrame) {
     // シリアル割り込みの処理
-    // TODO: シリアル通信の処理
+    // TODO(Phase 4): シリアル通信の処理
 }
 
 /// 汎用割り込みハンドラー
 #[allow(dead_code)]
 extern "x86-interrupt" fn generic_interrupt_handler(_stack_frame: InterruptStackFrame) {
     // 汎用割り込みの処理
-    // TODO: 割り込み番号に応じた処理
+    // TODO(Phase 2): 割り込み番号に応じた処理
 }

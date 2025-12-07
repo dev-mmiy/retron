@@ -13,22 +13,12 @@ mod config;
 #[allow(dead_code)]
 mod filesystem;
 #[allow(dead_code)]
-mod fs_demo;
-#[allow(dead_code)]
-mod fs_test;
-#[allow(dead_code)]
 mod init_config;
-#[allow(dead_code)]
-mod kernel_test;
 mod simple;
 #[allow(dead_code)]
 mod stdio_terminal;
 #[allow(dead_code)]
 mod terminal;
-#[allow(dead_code)]
-mod terminal_demo;
-#[allow(dead_code)]
-mod terminal_test;
 
 /// カーネルエントリーポイント（Multiboot対応）
 #[no_mangle]
