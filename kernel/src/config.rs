@@ -2,8 +2,8 @@
 //!
 //! カーネル起動時に実行するプログラムを設定可能
 
-use core::option::Option::{self, Some, None};
-use core::result::Result::{self, Ok, Err};
+use core::option::Option::{self, None, Some};
+use core::result::Result::{self, Err, Ok};
 use spin::Mutex;
 
 /// 設定エラー
@@ -35,7 +35,7 @@ pub struct Program {
     pub name_len: u8,
     pub program_type: ProgramType,
     pub enabled: bool,
-    pub priority: u8, // 優先度（0-255）
+    pub priority: u8,          // 優先度（0-255）
     pub description: [u8; 64], // 説明（最大63文字）
     pub description_len: u8,
 }
@@ -97,23 +97,48 @@ impl ConfigManager {
     /// デフォルトプログラムを登録
     fn register_default_programs(&mut self) {
         // ターミナルプログラム
-        let _ = self.register_program("terminal", ProgramType::Terminal, true, 100, "Interactive terminal");
+        let _ = self.register_program(
+            "terminal",
+            ProgramType::Terminal,
+            true,
+            100,
+            "Interactive terminal",
+        );
 
         // シェルプログラム
         let _ = self.register_program("shell", ProgramType::Shell, false, 90, "Command shell");
 
         // システム情報プログラム
-        let _ = self.register_program("sysinfo", ProgramType::Application, false, 80, "System information");
+        let _ = self.register_program(
+            "sysinfo",
+            ProgramType::Application,
+            false,
+            80,
+            "System information",
+        );
 
         // ファイルマネージャープログラム
-        let _ = self.register_program("filemanager", ProgramType::Application, false, 70, "File manager");
+        let _ = self.register_program(
+            "filemanager",
+            ProgramType::Application,
+            false,
+            70,
+            "File manager",
+        );
 
         // テストプログラム
         let _ = self.register_program("test", ProgramType::Application, false, 60, "System test");
     }
 
     /// プログラムを登録
-    pub fn register_program(&mut self, name: &str, program_type: ProgramType, enabled: bool, priority: u8, description: &str) -> ConfigResult<()> {
+    pub fn register_program(
+        &mut self,
+        name: &str,
+        program_type: ProgramType,
+        enabled: bool,
+        priority: u8,
+        description: &str,
+    ) -> ConfigResult<()> {
         if self.program_count >= 16 {
             return Err(ConfigError::SystemError);
         }
@@ -184,7 +209,10 @@ impl ConfigManager {
 
     /// デフォルトプログラムを取得
     pub fn get_default_program(&self) -> Option<&Program> {
-        let default_name = core::str::from_utf8(&self.config.default_program[..self.config.default_program_len as usize]).unwrap_or("");
+        let default_name = core::str::from_utf8(
+            &self.config.default_program[..self.config.default_program_len as usize],
+        )
+        .unwrap_or("");
         self.find_program(default_name)
     }
 
@@ -193,7 +221,10 @@ impl ConfigManager {
         if len1 != str2.len() {
             return false;
         }
-        str1.iter().take(len1).zip(str2.as_bytes()).all(|(a, b)| a == b)
+        str1.iter()
+            .take(len1)
+            .zip(str2.as_bytes())
+            .all(|(a, b)| a == b)
     }
 
     /// 設定を初期化
@@ -238,7 +269,10 @@ pub fn get_config() -> ConfigResult<&'static mut ConfigManager> {
     // Note: This returns a reference that outlives the MutexGuard
     // In a real implementation, this would need proper lifetime management
     unsafe {
-        let ptr = CONFIG_MANAGER.lock().as_mut().ok_or(ConfigError::SystemError)? as *mut ConfigManager;
+        let ptr = CONFIG_MANAGER
+            .lock()
+            .as_mut()
+            .ok_or(ConfigError::SystemError)? as *mut ConfigManager;
         Ok(&mut *ptr)
     }
 }
@@ -246,23 +280,25 @@ pub fn get_config() -> ConfigResult<&'static mut ConfigManager> {
 /// デフォルトプログラムを実行
 pub fn run_default_program() -> ConfigResult<()> {
     let config = get_config()?;
-    let default_program = config.get_default_program().ok_or(ConfigError::ProgramNotFound)?;
-    
-        match default_program.name[..default_program.name_len as usize] {
-            [b't', b'e', b'r', b'm', b'i', b'n', b'a', b'l'] => {
-                // ターミナルプログラムを実行
-                match crate::stdio_terminal::run_stdio_terminal() {
-                    Ok(_) => Ok(()),
-                    Err(_) => Err(ConfigError::SystemError)
-                }
-            },
-            [b's', b'h', b'e', b'l', b'l'] => {
-                // シェルプログラムを実行
-                match crate::stdio_terminal::run_stdio_shell() {
-                    Ok(_) => Ok(()),
-                    Err(_) => Err(ConfigError::SystemError)
-                }
-            },
-            _ => Err(ConfigError::ProgramNotFound)
+    let default_program = config
+        .get_default_program()
+        .ok_or(ConfigError::ProgramNotFound)?;
+
+    match default_program.name[..default_program.name_len as usize] {
+        [b't', b'e', b'r', b'm', b'i', b'n', b'a', b'l'] => {
+            // ターミナルプログラムを実行
+            match crate::stdio_terminal::run_stdio_terminal() {
+                Ok(_) => Ok(()),
+                Err(_) => Err(ConfigError::SystemError),
+            }
         }
+        [b's', b'h', b'e', b'l', b'l'] => {
+            // シェルプログラムを実行
+            match crate::stdio_terminal::run_stdio_shell() {
+                Ok(_) => Ok(()),
+                Err(_) => Err(ConfigError::SystemError),
+            }
+        }
+        _ => Err(ConfigError::ProgramNotFound),
+    }
 }

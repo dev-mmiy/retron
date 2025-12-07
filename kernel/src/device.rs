@@ -1,5 +1,5 @@
 //! デバイス管理モジュール
-//! 
+//!
 //! デバイスドライバーの管理と抽象化
 
 use crate::prelude::*;
@@ -61,9 +61,15 @@ impl DeviceManager {
     }
 
     /// デバイスを登録
-    pub fn register_device(&mut self, device_type: DeviceType, name: &'static str, base_address: usize, interrupt_number: Option<u8>) -> Option<usize> {
+    pub fn register_device(
+        &mut self,
+        device_type: DeviceType,
+        name: &'static str,
+        base_address: usize,
+        interrupt_number: Option<u8>,
+    ) -> Option<usize> {
         let device_id = self.next_device_id.fetch_add(1, Ordering::SeqCst);
-        
+
         if device_id >= 64 {
             return None;
         }
@@ -130,7 +136,7 @@ static mut DEVICE_MANAGER: Option<DeviceManager> = None;
 pub fn init() {
     unsafe {
         DEVICE_MANAGER = Some(DeviceManager::new());
-        
+
         // 基本的なデバイスを登録
         register_serial_devices();
         register_timer_devices();
@@ -160,7 +166,12 @@ fn register_timer_devices() {
 }
 
 /// デバイスを登録
-pub fn register_device(device_type: DeviceType, name: &'static str, base_address: usize, interrupt_number: Option<u8>) -> Option<usize> {
+pub fn register_device(
+    device_type: DeviceType,
+    name: &'static str,
+    base_address: usize,
+    interrupt_number: Option<u8>,
+) -> Option<usize> {
     unsafe {
         if let Some(ref mut manager) = DEVICE_MANAGER {
             manager.register_device(device_type, name, base_address, interrupt_number)

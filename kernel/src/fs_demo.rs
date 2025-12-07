@@ -1,7 +1,7 @@
 //! ファイルシステムのデモンストレーション機能
 
-use core::result::Result::{Ok, Err};
 use crate::filesystem::*;
+use core::result::Result::{Err, Ok};
 
 /// ファイルシステムのデモンストレーション
 pub fn filesystem_demo() {
@@ -28,7 +28,7 @@ fn demo_basic_operations() {
     match fs.create_file("/hello.txt", FilePermissions::default()) {
         Ok(_id) => {
             // ファイル作成成功
-        },
+        }
         Err(_) => return,
     }
 
@@ -60,7 +60,7 @@ fn demo_directory_structure() {
         match fs.create_directory(dir, FilePermissions::default()) {
             Ok(_) => {
                 // ディレクトリ作成成功
-            },
+            }
             Err(_) => {
                 // エラー（既に存在する可能性）
             }
@@ -90,7 +90,7 @@ fn demo_file_operations() {
         match fs.create_file(file, FilePermissions::default()) {
             Ok(_) => {
                 // ファイル作成成功
-            },
+            }
             Err(_) => {
                 // エラー（親ディレクトリが存在しない可能性）
             }
@@ -106,7 +106,7 @@ fn demo_statistics() {
     };
 
     let _stats = fs.get_stats();
-    
+
     // 統計情報の表示（実際の実装ではVGAバッファに書き込む）
     // ここでは簡易的なデモンストレーション
 }
@@ -125,10 +125,10 @@ pub fn filesystem_detailed_demo() {
 
     // 複雑なディレクトリ構造を作成
     create_complex_directory_structure(fs);
-    
+
     // ファイルの作成
     create_demo_files(fs);
-    
+
     // 統計情報の表示
     display_filesystem_stats(fs);
 }
@@ -161,7 +161,7 @@ fn create_complex_directory_structure(fs: &mut FileSystem) {
             match fs.create_directory(dir, FilePermissions::default()) {
                 Ok(_) => {
                     // ディレクトリ作成成功
-                },
+                }
                 Err(_) => {
                     // エラー（既に存在する可能性）
                 }
@@ -195,7 +195,7 @@ fn create_demo_files(fs: &mut FileSystem) {
         match fs.create_file(file, FilePermissions::default()) {
             Ok(_) => {
                 // ファイル作成成功
-            },
+            }
             Err(_) => {
                 // エラー（親ディレクトリが存在しない可能性）
             }
@@ -206,7 +206,7 @@ fn create_demo_files(fs: &mut FileSystem) {
 /// ファイルシステム統計情報を表示
 fn display_filesystem_stats(fs: &FileSystem) {
     let _stats = fs.get_stats();
-    
+
     // 統計情報の表示（実際の実装ではVGAバッファに書き込む）
     // ここでは簡易的なデモンストレーション
 }
@@ -249,13 +249,13 @@ pub fn filesystem_performance_demo() {
         path[pos + 2] = b'x';
         path[pos + 3] = b't';
         path[pos + 4] = 0;
-        
+
         // 文字列に変換
         let path_str = core::str::from_utf8(&path[..pos + 4]).unwrap_or("/perf_test_0.txt");
         match fs.create_file(path_str, FilePermissions::default()) {
             Ok(_) => {
                 // ファイル作成成功
-            },
+            }
             Err(_) => {
                 // エラー（ディスクフル等）
                 break;
@@ -265,7 +265,7 @@ pub fn filesystem_performance_demo() {
 
     // 統計情報の表示
     let _stats = fs.get_stats();
-    
+
     // 統計情報の表示（実際の実装ではVGAバッファに書き込む）
     // ここでは簡易的なデモンストレーション
 }

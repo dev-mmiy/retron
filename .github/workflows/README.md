@@ -2,23 +2,30 @@
 
 このディレクトリには、Retron OSのCI/CDパイプラインの設定が含まれています。
 
+## ⚡ 方針
+
+**ローカルファースト**: 開発者がローカルでテストを実行することを前提とし、GitHub上では必要最低限のチェックのみ実行します。
+
 ## ワークフロー一覧
 
 ### CI/CD Pipeline (`ci.yml`)
 メインのCI/CDパイプラインで、プッシュとプルリクエスト時に実行されます。
 
-**ジョブ:**
-1. **Format Check** - コードフォーマットの確認
-2. **Clippy Check** - Rust linterによるコード品質チェック
-3. **Build** - リリースビルドの作成
-4. **Tests** - テスト実行（no_std環境のため制限あり）
-5. **Documentation** - ドキュメント生成
-6. **Cargo Check** - 型チェックと依存関係の確認
-7. **Security Audit** - セキュリティ監査
+**ジョブ（最小構成）:**
+1. **Format Check** - コードフォーマットの確認（必須）
+2. **Clippy Check** - ゼロ警告ポリシーの検証（必須）
+3. **Build** - リリースビルドの確認（必須）
+
+**削除されたジョブ（ローカルで実行）:**
+- ~~Tests~~ → ローカルで実行
+- ~~Documentation~~ → ローカルで確認
+- ~~Cargo Check~~ → Clippyでカバー
+- ~~Security Audit~~ → 週次スキャンのみ
 
 **重要な設定:**
 - `RUSTFLAGS: -D warnings` - すべての警告をエラーとして扱う
 - ゼロ警告ポリシーを厳格に適用
+- 高速フィードバック（約2-3分で完了）
 
 ### Security Scan (`security.yml`)
 セキュリティスキャンワークフローで、定期的に実行されます。
@@ -32,32 +39,50 @@
 1. **Dependency Audit** - 依存関係の脆弱性スキャン
 2. **Dependency Updates** - 古い依存関係の確認
 
-## ローカルでの実行
+## 📝 プッシュ前のローカルチェックリスト
 
-### フォーマットチェック
+**PRを作成する前に、以下のコマンドを必ず実行してください:**
+
+### 1. フォーマット修正
 ```bash
 cd kernel
-cargo fmt --all -- --check
+cargo fmt --all
 ```
 
-### Clippyチェック
+### 2. Clippyチェック（ゼロ警告必須）
 ```bash
 cd kernel
-cargo clippy --lib --bin retron-kernel -- -D warnings
+cargo clippy --lib --bins -- -D warnings
 ```
 
-### ビルド
+### 3. リリースビルド
 ```bash
 cd kernel
 cargo build --release --target x86_64-unknown-none
 ```
 
-### セキュリティ監査
+### 4. ドキュメント生成（オプション）
 ```bash
-cargo install cargo-audit
+cd kernel
+cargo doc --no-deps --document-private-items
+```
+
+### 5. セキュリティ監査（オプション）
+```bash
+cargo install cargo-audit  # 初回のみ
 cd kernel
 cargo audit
 ```
+
+### ⚡ クイックチェック（全て実行）
+```bash
+cd kernel && \
+  cargo fmt --all && \
+  cargo clippy --lib --bins -- -D warnings && \
+  cargo build --release --target x86_64-unknown-none
+```
+
+**注意**: これらすべてが成功しないと、GitHub上のCIも失敗します。
 
 ## トラブルシューティング
 

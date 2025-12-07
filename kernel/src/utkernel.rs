@@ -1,5 +1,5 @@
 //! μT-Kernel互換レイヤー
-//! 
+//!
 //! μT-Kernel 3.x APIの互換性を提供
 
 use crate::prelude::*;
@@ -49,7 +49,12 @@ impl UTKernelLayer {
     }
 
     /// タスクを作成 (tk_cre_tsk互換)
-    pub fn create_task(&mut self, priority: TaskPriority, stack_size: usize, _entry_point: fn()) -> Option<TaskId> {
+    pub fn create_task(
+        &mut self,
+        priority: TaskPriority,
+        stack_size: usize,
+        _entry_point: fn(),
+    ) -> Option<TaskId> {
         // スタック領域の割り当て
         let stack: *mut u8 = core::ptr::null_mut();
 
@@ -66,7 +71,7 @@ impl UTKernelLayer {
                     stksz: stack_size,
                     stk: stack,
                 };
-                
+
                 self.tasks[i] = Some(task);
                 self.next_task_id += 1;
                 return Some(task.tskid);
@@ -127,7 +132,7 @@ impl UTKernelLayer {
                     blkcnt: block_count,
                     mpf: memory,
                 };
-                
+
                 self.memory_pools[i] = Some(pool);
                 self.next_pool_id += 1;
                 return Some(pool.mpfid);

@@ -2,8 +2,8 @@
 //!
 //! カーネル起動時に自動実行されるプログラムを設定
 
-use core::option::Option::{self, Some, None};
-use core::result::Result::{self, Ok, Err};
+use core::option::Option::{self, None, Some};
+use core::result::Result::{self, Err, Ok};
 use spin::Mutex;
 
 /// init.configパーサーのエラー
@@ -142,47 +142,47 @@ impl InitConfigParser {
     pub fn parse_config(&mut self, config_content: &str) -> InitConfigResult<()> {
         let lines = config_content.split('\n');
         let mut current_section = None;
-        
+
         for line in lines {
             let line = line.trim();
-            
+
             // 空行やコメント行をスキップ
             if line.is_empty() || line.starts_with('#') {
                 continue;
             }
-            
+
             // セクションの開始
             if line.starts_with('[') && line.ends_with(']') {
                 current_section = self.parse_section(line);
                 continue;
             }
-            
+
             // キー=値の解析
             if let Some(equal_pos) = line.find('=') {
                 let key = line[..equal_pos].trim();
                 let value = line[equal_pos + 1..].trim();
-                
+
                 match current_section {
                     Some(ConfigSection::System) => {
                         self.parse_system_config(key, value)?;
-                    },
+                    }
                     Some(ConfigSection::Programs) => {
                         self.parse_program_config(key, value)?;
-                    },
+                    }
                     Some(ConfigSection::Startup) => {
                         self.parse_startup_config(key, value)?;
-                    },
+                    }
                     Some(ConfigSection::Environment) => {
                         self.parse_environment_config(key, value)?;
-                    },
+                    }
                     Some(ConfigSection::Logging) => {
                         self.parse_logging_config(key, value)?;
-                    },
+                    }
                     None => return Err(InitConfigError::InvalidSection),
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -211,16 +211,16 @@ impl InitConfigParser {
                     self.system_config.default_shell[i] = byte;
                 }
                 self.system_config.default_shell_len = value_bytes.len() as u8;
-            },
+            }
             "auto_start" => {
                 self.system_config.auto_start = value == "true";
-            },
+            }
             "debug_mode" => {
                 self.system_config.debug_mode = value == "true";
-            },
+            }
             "verbose_output" => {
                 self.system_config.verbose_output = value == "true";
-            },
+            }
             _ => return Err(InitConfigError::InvalidKey),
         }
         Ok(())
@@ -237,7 +237,7 @@ impl InitConfigParser {
         let mut part_count = 0;
         let _current_part = 0;
         let mut start = 0;
-        
+
         for (i, &byte) in value.as_bytes().iter().enumerate() {
             if byte == b',' {
                 if part_count < 4 {
@@ -247,19 +247,22 @@ impl InitConfigParser {
                 start = i + 1;
             }
         }
-        
+
         // 最後の部分を追加
         if part_count < 4 {
             parts[part_count] = &value[start..];
             part_count += 1;
         }
-        
+
         if part_count != 4 {
             return Err(InitConfigError::ParseError);
         }
 
         let enabled = parts[0].trim() == "true";
-        let priority = parts[1].trim().parse::<u8>().map_err(|_| InitConfigError::InvalidValue)?;
+        let priority = parts[1]
+            .trim()
+            .parse::<u8>()
+            .map_err(|_| InitConfigError::InvalidValue)?;
         let program_type = parts[2].trim();
         let description = parts[3].trim();
 
@@ -383,7 +386,7 @@ impl InitConfigParser {
                     self.log_config.log_level[i] = byte;
                 }
                 self.log_config.log_level_len = value_bytes.len() as u8;
-            },
+            }
             "log_file" => {
                 let value_bytes = value.as_bytes();
                 if value_bytes.len() > 63 {
@@ -393,10 +396,10 @@ impl InitConfigParser {
                     self.log_config.log_file[i] = byte;
                 }
                 self.log_config.log_file_len = value_bytes.len() as u8;
-            },
+            }
             "console_output" => {
                 self.log_config.console_output = value == "true";
-            },
+            }
             _ => return Err(InitConfigError::InvalidKey),
         }
         Ok(())
@@ -411,7 +414,7 @@ impl InitConfigParser {
     pub fn get_enabled_programs(&self) -> [Option<&ProgramConfig>; 16] {
         let mut enabled = [None; 16];
         let mut count = 0;
-        
+
         for i in 0..self.program_count as usize {
             if let Some(program) = &self.programs[i] {
                 if program.enabled && count < 16 {
@@ -450,7 +453,14 @@ impl InitConfigParser {
     }
 
     /// デフォルトプログラムを追加
-    fn add_default_program(&mut self, name: &str, enabled: bool, priority: u8, program_type: &str, description: &str) -> InitConfigResult<()> {
+    fn add_default_program(
+        &mut self,
+        name: &str,
+        enabled: bool,
+        priority: u8,
+        program_type: &str,
+        description: &str,
+    ) -> InitConfigResult<()> {
         if self.program_count >= 16 {
             return Err(InitConfigError::SystemError);
         }
@@ -585,7 +595,10 @@ pub fn get_config_parser() -> InitConfigResult<&'static mut InitConfigParser> {
     // Note: This returns a reference that outlives the MutexGuard
     // In a real implementation, this would need proper lifetime management
     unsafe {
-        let ptr = INIT_CONFIG_PARSER.lock().as_mut().ok_or(InitConfigError::SystemError)? as *mut InitConfigParser;
+        let ptr = INIT_CONFIG_PARSER
+            .lock()
+            .as_mut()
+            .ok_or(InitConfigError::SystemError)? as *mut InitConfigParser;
         Ok(&mut *ptr)
     }
 }
@@ -600,7 +613,7 @@ pub fn load_init_config(config_content: &str) -> InitConfigResult<()> {
 pub fn load_init_config_from_filesystem() -> InitConfigResult<()> {
     // デバッグ出力を追加
     crate::simple::println("DEBUG: load_init_config_from_filesystem() - START");
-    
+
     // ファイルシステムからinit.configを読み込む
     // 実際の実装では、ファイルシステムのread_file機能を使用
     crate::simple::println("DEBUG: Using default config content");
@@ -633,7 +646,7 @@ log_level = "info"
 log_file = "/var/log/retron.log"
 console_output = true
 "#;
-    
+
     crate::simple::println("DEBUG: Calling load_init_config()");
     let result = load_init_config(default_config);
     crate::simple::println("DEBUG: load_init_config() completed");
@@ -644,30 +657,26 @@ console_output = true
 pub fn execute_startup_sequence() -> InitConfigResult<()> {
     let parser = get_config_parser()?;
     let startup_sequence = parser.get_startup_sequence();
-    
+
     for program_name in startup_sequence.iter().flatten() {
         let program_str = core::str::from_utf8(program_name).unwrap_or("");
         execute_program(program_str)?;
     }
-    
+
     Ok(())
 }
 
 /// プログラムを実行
 fn execute_program(program_name: &str) -> InitConfigResult<()> {
     match program_name {
-        "terminal" => {
-            match crate::stdio_terminal::run_stdio_terminal() {
-                Ok(_) => Ok(()),
-                Err(_) => Err(InitConfigError::SystemError)
-            }
+        "terminal" => match crate::stdio_terminal::run_stdio_terminal() {
+            Ok(_) => Ok(()),
+            Err(_) => Err(InitConfigError::SystemError),
         },
-        "shell" => {
-            match crate::stdio_terminal::run_stdio_shell() {
-                Ok(_) => Ok(()),
-                Err(_) => Err(InitConfigError::SystemError)
-            }
+        "shell" => match crate::stdio_terminal::run_stdio_shell() {
+            Ok(_) => Ok(()),
+            Err(_) => Err(InitConfigError::SystemError),
         },
-        _ => Err(InitConfigError::InvalidValue)
+        _ => Err(InitConfigError::InvalidValue),
     }
 }
