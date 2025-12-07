@@ -52,7 +52,7 @@ cargo fmt --all
 ### 2. Clippyチェック（ゼロ警告必須）
 ```bash
 cd kernel
-cargo clippy --lib --bin retron-kernel -- -D warnings
+cargo clippy --lib --bins -- -D warnings
 ```
 
 ### 3. リリースビルド
@@ -78,7 +78,7 @@ cargo audit
 ```bash
 cd kernel && \
   cargo fmt --all && \
-  cargo clippy --lib --bin retron-kernel -- -D warnings && \
+  cargo clippy --lib --bins -- -D warnings && \
   cargo build --release --target x86_64-unknown-none
 ```
 
