@@ -217,5 +217,5 @@ pub fn find_device(device_type: DeviceType) -> Option<usize> {
 /// デバイス処理
 pub fn process() {
     // デバイスの定期的な処理
-    // TODO: 各デバイスの処理を実装
+    // TODO(Phase 2): 各デバイスの処理を実装
 }

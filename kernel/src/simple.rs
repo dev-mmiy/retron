@@ -1,13 +1,5 @@
 //! シンプルなカーネル（デバッグ用）
 
-use core::arch::asm;
-
-/// シンプルなHello World表示
-#[allow(dead_code)]
-pub fn simple_hello() {
-    println("Hello, Retron OS!");
-}
-
 /// グローバルカーソル位置
 static mut CURSOR_POS: usize = 0;
 
@@ -44,24 +36,8 @@ pub fn serial_print(text: &str) {
     print(text);
 }
 
-/// シリアルポートの初期化（簡易版）
-#[allow(dead_code)]
-pub fn init_serial() {
-    // WSL環境ではシリアルポートが制限されるため、何もしない
-}
-
 /// シリアルポート経由での出力（改行付き）
 pub fn serial_println(text: &str) {
     serial_print(text);
     serial_print("\n");
-}
-
-/// システム停止
-#[allow(dead_code)]
-pub fn halt() {
-    loop {
-        unsafe {
-            asm!("hlt");
-        }
-    }
 }
