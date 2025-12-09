@@ -14,6 +14,7 @@ pub mod filesystem;
 pub mod init_config;
 pub mod interrupt;
 pub mod memory;
+pub mod multiboot;
 pub mod prelude;
 pub mod simple;
 pub mod stdio_terminal;
