@@ -1,6 +1,9 @@
 //! Multiboot ヘッダー
 //!
 //! QEMU/GRUBでブート可能にするためのMultiboot仕様準拠ヘッダー
+//!
+//! 注意: Multiboot 1は32bitカーネル専用のため、64bitカーネルでは
+//! QEMUの直接起動時にPVHと競合します。GRUB経由のブートには必要です。
 
 /// Multiboot マジックナンバー
 const MULTIBOOT_MAGIC: u32 = 0x1BADB002;
@@ -21,6 +24,10 @@ struct MultibootHeader {
     checksum: u32,
 }
 
+// Multibootヘッダーを一時的に無効化（PVHテスト用）
+// QEMU直接起動ではPVHを使用し、GRUB起動時にのみMultibootを有効化
+// 有効化するには以下のコメントを外してください
+/*
 /// Multiboot ヘッダー（.multiboot セクションに配置）
 #[used]
 #[link_section = ".multiboot"]
@@ -29,3 +36,4 @@ static MULTIBOOT_HEADER: MultibootHeader = MultibootHeader {
     flags: MULTIBOOT_FLAGS,
     checksum: MULTIBOOT_CHECKSUM,
 };
+*/
