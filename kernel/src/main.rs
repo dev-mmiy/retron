@@ -14,6 +14,7 @@ mod filesystem;
 #[allow(dead_code)]
 mod init_config;
 mod multiboot;
+mod pvh;
 mod simple;
 #[allow(dead_code)]
 mod stdio_terminal;

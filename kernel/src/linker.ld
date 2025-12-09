@@ -11,6 +11,11 @@ SECTIONS
         KEEP(*(.multiboot))
     }
 
+    /* PVH ELF Note（64-bit QEMU起動用） */
+    .note.PVH : {
+        KEEP(*(.note.PVH))
+    }
+
     /* テキストセクション */
     .text ALIGN(4K) : {
         KEEP(*(.text.kernel_main))
