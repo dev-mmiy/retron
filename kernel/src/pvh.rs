@@ -20,5 +20,5 @@ static PVH_NOTE: PvhNote = PvhNote {
     desc_size: 8,              // entry point のサイズ (64-bit)
     note_type: 18,             // XEN_ELFNOTE_PHYS32_ENTRY (0x12)
     name: *b"Xen\0",           // 名前（null終端）
-    entry: 0x0000000000100493, // エントリーポイント（kernel_main）
+    entry: 0x0000000000101000, // エントリーポイント（kernel_main at .text start）
 };
