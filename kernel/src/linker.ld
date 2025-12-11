@@ -44,10 +44,18 @@ SECTIONS
         *(COMMON)
     } :data
 
-    /* デバッグ情報は破棄 */
+    /* デバッグ情報とダイナミックセクションは破棄 */
     /DISCARD/ : {
         *(.eh_frame)
         *(.note.GNU-stack)
+        *(.dynsym)
+        *(.dynstr)
+        *(.dynamic)
+        *(.gnu.hash)
+        *(.hash)
+        *(.gnu.version*)
+        *(.rela.*)
+        *(.rel.*)
     }
 }
 
