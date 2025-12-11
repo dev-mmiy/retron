@@ -9,6 +9,8 @@ all: build
 build:
 	@echo "Building Retron OS..."
 	cargo build --manifest-path kernel/Cargo.toml --release
+	@echo "Stripping dynamic sections..."
+	@kernel/strip-dynamic-sections.sh kernel/target/x86_64-unknown-none/release/retron-kernel
 	@echo "Fixing ELF header..."
 	@kernel/fix-elf-type.sh kernel/target/x86_64-unknown-none/release/retron-kernel
 	@echo "Build completed!"
