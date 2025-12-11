@@ -3,13 +3,13 @@ OUTPUT_FORMAT(elf64-x86-64)
 OUTPUT_ARCH(i386:x86-64)
 ENTRY(kernel_main)
 
-/* Program Headers */
+/* Program Headers - PT_NOTE must come first for QEMU PVH loader */
 PHDRS
 {
+    note PT_NOTE FLAGS(4);   /* PVH boot note - MUST BE FIRST */
     text PT_LOAD FLAGS(5);   /* Read + Execute */
     rodata PT_LOAD FLAGS(4); /* Read only */
     data PT_LOAD FLAGS(6);   /* Read + Write */
-    note PT_NOTE FLAGS(4);   /* PVH boot note */
 }
 
 SECTIONS
@@ -17,17 +17,12 @@ SECTIONS
     /* カーネルは1MBから開始 */
     . = 1M;
 
-    /* Multibootヘッダーを最初に配置（最初の8KB以内に必須） */
-    .multiboot ALIGN(4K) : {
-        KEEP(*(.multiboot))
-    }
-
-    /* PVH ELF Note（64-bit QEMU起動用） */
+    /* PVH ELF Note（64-bit QEMU起動用）- 最初に配置が重要 */
     .note.PVH : {
         KEEP(*(.note.PVH))
     } :note
 
-    /* テキストセクション */
+    /* テキストセクション - エントリーポイント */
     .text ALIGN(4K) : {
         KEEP(*(.text.kernel_main))
         *(.text .text.*)
