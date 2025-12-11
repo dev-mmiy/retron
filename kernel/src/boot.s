@@ -15,17 +15,14 @@
 .global pvh_entry
 .type pvh_entry, @function
 
-# External symbols from linker script
-.extern _boot_stack_end
-
 pvh_entry:
     # Clear direction flag (required by System V ABI)
     cld
 
-    # Set up stack pointer to linker-defined boot stack
+    # Set up stack pointer to boot stack
     # The stack grows downward, so we point to the end
-    # Use RIP-relative addressing to linker symbol
-    leaq _boot_stack_end(%rip), %rsp
+    # Use RIP-relative addressing to boot_stack_end defined below
+    leaq boot_stack_end(%rip), %rsp
 
     # Clear frame pointer
     xorq %rbp, %rbp
@@ -51,4 +48,11 @@ pvh_entry:
 
 .size pvh_entry, . - pvh_entry
 
-# Boot stack is defined in linker.ld (_boot_stack_start, _boot_stack_end)
+# Boot stack (16KB) - defined in same compilation unit for proper RIP-relative addressing
+.section .data.boot_stack, "aw", @progbits
+.align 16
+.global boot_stack
+boot_stack:
+    .skip 16384  # 16KB stack
+.global boot_stack_end
+boot_stack_end:
