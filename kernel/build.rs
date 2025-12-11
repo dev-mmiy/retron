@@ -11,4 +11,15 @@ fn main() {
 
     // Re-run if the linker script changes
     println!("cargo:rerun-if-changed=src/linker.ld");
+
+    // Compile assembly boot entry point
+    let boot_asm = manifest_dir.join("src").join("boot.s");
+    println!("cargo:rerun-if-changed=src/boot.s");
+
+    // Use cc crate to assemble the boot.s file
+    cc::Build::new()
+        .file(boot_asm)
+        .flag("-nostdlib")
+        .flag("-ffreestanding")
+        .compile("boot");
 }

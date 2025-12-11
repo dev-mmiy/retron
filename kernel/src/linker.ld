@@ -1,7 +1,7 @@
 /* カーネルリンカースクリプト */
 OUTPUT_FORMAT(elf64-x86-64)
 OUTPUT_ARCH(i386:x86-64)
-ENTRY(kernel_main)
+ENTRY(pvh_entry)
 
 /* Program Headers - PT_NOTE must come first for QEMU PVH loader */
 PHDRS
@@ -24,6 +24,7 @@ SECTIONS
 
     /* テキストセクション - エントリーポイント */
     .text ALIGN(4K) : {
+        KEEP(*(.text.pvh_entry))
         KEEP(*(.text.kernel_main))
         *(.text .text.*)
     } :text

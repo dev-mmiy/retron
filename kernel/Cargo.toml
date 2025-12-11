@@ -28,6 +28,9 @@ pic8259 = "0.10"
 # シリアル通信
 uart_16550 = "0.2"
 
+[build-dependencies]
+cc = "1.0"
+
 [profile.dev]
 panic = "abort"
 lto = false
