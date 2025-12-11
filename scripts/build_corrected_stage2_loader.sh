@@ -1,0 +1,14 @@
+#!/bin/bash
+echo "Building corrected Stage2 loader..."
+
+# 修正版第2段階ELFローダーのビルド
+echo "Building corrected Stage2 ELF loader..."
+nasm -f bin boot/corrected_stage2_elf_loader.asm -o retron-corrected-stage2-elf-loader.bin
+if [ $? -eq 0 ]; then
+    echo "Corrected Stage2 ELF loader built successfully: retron-corrected-stage2-elf-loader.bin"
+    ls -l retron-corrected-stage2-elf-loader.bin
+else
+    echo "Error building corrected Stage2 ELF loader"
+    exit 1
+fi
+
