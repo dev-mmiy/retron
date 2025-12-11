@@ -37,6 +37,12 @@ SECTIONS
     /* データセクション */
     .data ALIGN(4K) : {
         *(.data .data.*)
+
+        /* Boot stack (16KB) - defined in linker script */
+        . = ALIGN(16);
+        _boot_stack_start = .;
+        . += 0x4000; /* 16KB stack */
+        _boot_stack_end = .;
     } :data
 
     /* BSSセクション */
