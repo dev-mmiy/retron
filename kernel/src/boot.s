@@ -48,8 +48,8 @@ pvh_entry:
 
 .size pvh_entry, . - pvh_entry
 
-# Boot stack (16KB)
-.section .bss
+# Boot stack (16KB) - in .data section to ensure it's loaded into memory
+.section .data
 .align 16
 boot_stack:
     .skip 16384  # 16KB stack
