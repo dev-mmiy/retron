@@ -132,11 +132,13 @@ _start:
     mov %eax, %cr0
 
     # Load GDT (hardcoded address)
-    lgdt 0x102000  # GDT pointer at 1MB + 8KB
+    # gdt64_pointer is in .data section at 0x103000
+    lgdt 0x103000
 
     # Far jump to 64-bit code (hardcoded)
+    # long_mode_start is at 0x1000ca (verified with readelf)
     .byte 0xEA
-    .long 0x101100  # long_mode_start offset
+    .long 0x1000ca
     .word 0x08      # Code segment
 
 .no_long_mode:
