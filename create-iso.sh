@@ -13,6 +13,10 @@ cp "$KERNEL_PATH" "$BOOT_DIR/retron-kernel"
 
 # Create grub.cfg
 cat > "$GRUB_DIR/grub.cfg" << 'GRUBCFG'
+serial --unit=0 --speed=115200
+terminal_input serial
+terminal_output serial
+
 set timeout=0
 set default=0
 
