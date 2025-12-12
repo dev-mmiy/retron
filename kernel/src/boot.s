@@ -39,8 +39,8 @@ pvh_entry:
 
     # Call the Rust kernel main function using absolute address
     # PC-relative call fails due to DYN->EXEC conversion
-    # kernel_main is at 0x101026 (verified with readelf)
-    movq $0x101026, %rax
+    # kernel_main is at 0x10102a (verified with readelf on user machine)
+    movq $0x10102a, %rax
     callq *%rax
 
     # If kernel_main returns (it shouldn't), halt
