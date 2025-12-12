@@ -37,13 +37,20 @@ SECTIONS
     /* データセクション */
     .data ALIGN(4K) : {
         *(.data .data.*)
-        *(.data.boot_stack)  /* Boot stack from assembly */
     } :data
 
     /* BSSセクション */
     .bss ALIGN(4K) : {
         *(.bss .bss.*)
         *(COMMON)
+    } :data
+
+    /* Boot stack - 16KB aligned, placed at fixed address for assembly reference */
+    . = 0x108000;
+    .bss.boot_stack . : {
+        boot_stack_start = .;
+        *(.bss.boot_stack)
+        boot_stack_end = .;
     } :data
 
     /* デバッグ情報とダイナミックセクションは破棄 */

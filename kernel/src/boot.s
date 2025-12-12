@@ -21,8 +21,9 @@ pvh_entry:
 
     # Set up stack pointer to boot stack
     # Use immediate address since RIP-relative addressing fails with DYN->EXEC conversion
-    # boot_stack_end is at 0x108310 (verified with readelf)
-    movq $0x108310, %rsp
+    # BOOT_STACK is at 0x105008 (in .bss), size 16KB (0x4000)
+    # Stack top (grows downward) is at 0x105008 + 0x4000 = 0x109008
+    movq $0x109008, %rsp
 
     # Clear frame pointer
     xorq %rbp, %rbp
@@ -51,11 +52,5 @@ pvh_entry:
 
 .size pvh_entry, . - pvh_entry
 
-# Boot stack (16KB) - defined in same compilation unit for proper RIP-relative addressing
-.section .data.boot_stack, "aw", @progbits
-.align 16
-.global boot_stack
-boot_stack:
-    .skip 16384  # 16KB stack
-.global boot_stack_end
-boot_stack_end:
+# Boot stack is now defined in boot_stack.rs as a Rust static array
+# and placed by the linker script at 0x108000

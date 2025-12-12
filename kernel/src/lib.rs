@@ -8,6 +8,7 @@
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 
+pub mod boot_stack;
 pub mod config;
 pub mod device;
 pub mod filesystem;
