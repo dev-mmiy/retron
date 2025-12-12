@@ -37,8 +37,11 @@ pvh_entry:
     xorq %r8, %r8
     xorq %r9, %r9
 
-    # Call the Rust kernel main function
-    call kernel_main
+    # Call the Rust kernel main function using absolute address
+    # PC-relative call fails due to DYN->EXEC conversion
+    # kernel_main is at 0x101026 (verified with readelf)
+    movq $0x101026, %rax
+    callq *%rax
 
     # If kernel_main returns (it shouldn't), halt
 .Lhalt:
