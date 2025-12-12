@@ -43,6 +43,19 @@ run-simple: build
 		-nographic \
 		-no-reboot
 
+# Multiboot2 + GRUB経由での実行
+iso: build
+	@echo "Creating bootable ISO with GRUB..."
+	@./create-iso.sh
+
+run-iso: iso
+	@echo "Starting Retron OS from ISO..."
+	qemu-system-x86_64 \
+		-cdrom retron.iso \
+		-m 128M \
+		-nographic \
+		-no-reboot
+
 # ブートローダーでの実行
 run-bootloader:
 	@echo "Starting Retron OS with Bootloader..."
