@@ -20,9 +20,9 @@ pvh_entry:
     cld
 
     # Set up stack pointer to boot stack
-    # The stack grows downward, so we point to the end
-    # Use RIP-relative addressing to boot_stack_end defined below
-    leaq boot_stack_end(%rip), %rsp
+    # Use immediate address since RIP-relative addressing fails with DYN->EXEC conversion
+    # boot_stack_end is at 0x108310 (verified with readelf)
+    movq $0x108310, %rsp
 
     # Clear frame pointer
     xorq %rbp, %rbp
