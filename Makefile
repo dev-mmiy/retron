@@ -53,9 +53,7 @@ run-iso: iso
 	qemu-system-x86_64 \
 		-cdrom retron.iso \
 		-m 128M \
-		-serial stdio \
-		-nographic \
-		-no-reboot
+		-nographic
 
 # ブートローダーでの実行
 run-bootloader:
