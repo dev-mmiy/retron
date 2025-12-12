@@ -17,9 +17,13 @@ fn main() {
     println!("cargo:rerun-if-changed=src/boot.s");
 
     // Use cc crate to assemble the boot.s file
+    // Important: For Multiboot2 with mixed 32/64-bit code, we need special handling
     cc::Build::new()
         .file(boot_asm)
         .flag("-nostdlib")
         .flag("-ffreestanding")
+        .flag("-m64")  // Target 64-bit, but allow 32-bit sections
+        .flag("-Wa,--64")  // Tell assembler to generate 64-bit code by default
+        .flag("-Wa,--divide")  // Allow division in assembly
         .compile("boot");
 }

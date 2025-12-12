@@ -1,12 +1,12 @@
-/* カーネルリンカースクリプト */
+/* カーネルリンカースクリプト - Multiboot2対応 */
 OUTPUT_FORMAT(elf64-x86-64)
 OUTPUT_ARCH(i386:x86-64)
-ENTRY(pvh_entry)
+ENTRY(_start)
 
-/* Program Headers - PT_NOTE must come first for QEMU PVH loader */
+/* Program Headers */
 PHDRS
 {
-    note PT_NOTE FLAGS(4);   /* PVH boot note - MUST BE FIRST */
+    boot PT_LOAD FLAGS(5);   /* Boot code (Read + Execute) */
     text PT_LOAD FLAGS(5);   /* Read + Execute */
     rodata PT_LOAD FLAGS(4); /* Read only */
     data PT_LOAD FLAGS(6);   /* Read + Write */
@@ -14,20 +14,18 @@ PHDRS
 
 SECTIONS
 {
-    /* カーネルは1MBから開始 */
+    /* カーネルは1MBから開始（Multiboot2標準） */
     . = 1M;
 
-    /* PVH ELF Note（64-bit QEMU起動用）- 最初に配置が重要 */
-    .note.PVH : {
-        KEEP(*(.note.PVH))
-    } :note
+    /* Boot segment: Multiboot header + code */
+    .boot : {
+        KEEP(*(.multiboot))
+        *(.text)
+        *(.text.*)
+    } :boot
 
-    /* テキストセクション - エントリーポイント */
-    .text ALIGN(4K) : {
-        KEEP(*(.text.pvh_entry))
-        KEEP(*(.text.kernel_main))
-        *(.text .text.*)
-    } :text
+    /* Align for next segment */
+    . = ALIGN(4K);
 
     /* 読み取り専用データ */
     .rodata ALIGN(4K) : {
@@ -44,7 +42,6 @@ SECTIONS
         . = ALIGN(8);
         __bss_start = .;
         *(.bss .bss.*)
-        *(.bss.boot_stack)
         *(COMMON)
         . = ALIGN(8);
         __bss_end = .;
@@ -54,6 +51,7 @@ SECTIONS
     /DISCARD/ : {
         *(.eh_frame)
         *(.note.GNU-stack)
+        *(.note.PVH)  /* PVH noteは不要 */
         *(.dynsym)
         *(.dynstr)
         *(.dynamic)
@@ -64,4 +62,3 @@ SECTIONS
         *(.rel.*)
     }
 }
-
