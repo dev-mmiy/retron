@@ -55,6 +55,13 @@ run-iso: iso
 		-m 128M \
 		-nographic
 
+# VGA出力でGRUBを確認
+run-iso-vga: iso
+	@echo "Starting Retron OS from ISO (VGA mode)..."
+	qemu-system-x86_64 \
+		-cdrom retron.iso \
+		-m 128M
+
 # ブートローダーでの実行
 run-bootloader:
 	@echo "Starting Retron OS with Bootloader..."
