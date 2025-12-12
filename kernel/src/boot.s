@@ -21,9 +21,9 @@ pvh_entry:
 
     # Set up stack pointer to boot stack
     # Use immediate address since RIP-relative addressing fails with DYN->EXEC conversion
-    # BOOT_STACK is at 0x105008 (in .bss), size 16KB (0x4000)
-    # Stack top (grows downward) is at 0x105008 + 0x4000 = 0x109008
-    movq $0x109008, %rsp
+    # BOOT_STACK is at 0x104318 (in .bss), size 16KB (0x4000)
+    # Stack top (grows downward) is at 0x104318 + 0x4000 = 0x108318
+    movq $0x108318, %rsp
 
     # Clear frame pointer
     xorq %rbp, %rbp

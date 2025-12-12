@@ -39,18 +39,15 @@ SECTIONS
         *(.data .data.*)
     } :data
 
-    /* BSSセクション */
-    .bss ALIGN(4K) : {
+    /* BSSセクション（NOBITSだが、同じdata segmentに含める） */
+    .bss (NOLOAD) : {
+        . = ALIGN(8);
+        __bss_start = .;
         *(.bss .bss.*)
-        *(COMMON)
-    } :data
-
-    /* Boot stack - 16KB aligned, placed at fixed address for assembly reference */
-    . = 0x108000;
-    .bss.boot_stack . : {
-        boot_stack_start = .;
         *(.bss.boot_stack)
-        boot_stack_end = .;
+        *(COMMON)
+        . = ALIGN(8);
+        __bss_end = .;
     } :data
 
     /* デバッグ情報とダイナミックセクションは破棄 */
