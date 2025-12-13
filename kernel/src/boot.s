@@ -55,7 +55,7 @@ gdt64_end:
 
 gdt64_pointer:
     .word gdt64_end - gdt64 - 1
-    .quad gdt64
+    .quad 0  # Placeholder - will be calculated at runtime using PIC
 
 .section .text
 .code32
