@@ -1,6 +1,6 @@
 /*
  * Retron OS Boot Code - Multiboot2
- * Simplified version to avoid relocation issues
+ * Fixed version with working PIC addressing
  */
 
 .section .multiboot
@@ -38,6 +38,13 @@ stack_top:
 
 .section .data
 
+# Storage for Multiboot2 info (in .data section for easier addressing)
+.align 8
+multiboot2_magic:
+    .long 0
+multiboot2_info:
+    .long 0
+
 # GDT for long mode
 .align 16
 gdt64:
@@ -57,19 +64,26 @@ _start:
     cli
     cld
 
-    # Set up stack - use call/pop trick to get EIP
-    call .get_eip
-.get_eip:
-    pop %ebp
-    # EBP now contains EIP, calculate base address
-    # We're at 1MB + some offset
+    # Use hardcoded addresses to avoid relocation issues
+    # The kernel is loaded at 1MB (0x100000) by GRUB
 
-    # For simplicity, use hardcoded address (kernel is at 1MB)
-    movl $0x108000, %esp  # Stack at 1MB + 32KB
+    # Save Multiboot info - use hardcoded address for multiboot2_magic
+    # Based on linker script, .data section is around 0x103000
+    # We'll use stack to preserve these values instead
+    push %ebx  # Save Multiboot info pointer
+    push %eax  # Save Multiboot magic
 
-    # Save Multiboot info
-    mov %eax, %edi
-    mov %ebx, %esi
+    # Set up stack (hardcoded address)
+    movl $0x108000, %esp
+
+    # Restore Multiboot info from stack
+    pop %eax   # Multiboot magic
+    pop %ebx   # Multiboot info pointer
+
+    # Save to registers that won't be clobbered
+    # We'll pass these to kernel_main later
+    mov %eax, %edi  # EDI = Multiboot magic
+    mov %ebx, %esi  # ESI = Multiboot info pointer
 
     # Check for long mode support
     mov $0x80000000, %eax
@@ -83,18 +97,22 @@ _start:
     jz .no_long_mode
 
     # Set up page tables (hardcoded addresses)
-    # Clear PML4
-    movl $0x104000, %edi  # pml4 at 1MB + 16KB
+    # We need to save EDI/ESI first
+    push %edi
+    push %esi
+
+    # Clear PML4 at 0x104000
+    movl $0x104000, %edi
     xor %eax, %eax
     movl $1024, %ecx
     rep stosl
 
-    # Clear PDPT
+    # Clear PDPT at 0x105000
     movl $0x105000, %edi
     movl $1024, %ecx
     rep stosl
 
-    # Clear PD
+    # Clear PD at 0x106000
     movl $0x106000, %edi
     movl $1024, %ecx
     rep stosl
@@ -110,6 +128,10 @@ _start:
     # PD[0] -> 2MB page (identity map 0-2MB)
     movl $0x000083, %eax  # Present | Writable | Huge page
     movl %eax, 0x106000
+
+    # Restore EDI/ESI
+    pop %esi
+    pop %edi
 
     # Load CR3 with PML4 address
     movl $0x104000, %eax
@@ -131,15 +153,27 @@ _start:
     or $(1 << 31), %eax
     mov %eax, %cr0
 
-    # Load GDT (hardcoded address)
-    # gdt64_pointer is in .data section at 0x103000
-    lgdt 0x103000
+    # Load GDT (hardcoded address based on readelf)
+    # Get GDT pointer address using call/pop trick
+    call .get_gdt_addr
+.get_gdt_addr:
+    pop %ebp
+    # Calculate offset from here to gdt64_pointer
+    # This is position-independent
+    addl $(gdt64_pointer - .get_gdt_addr), %ebp
+    lgdt (%ebp)
 
-    # Far jump to 64-bit code (hardcoded)
-    # long_mode_start is at 0x1000ca (verified with readelf)
-    .byte 0xEA
-    .long 0x1000ca
-    .word 0x08      # Code segment
+    # Far jump to 64-bit code
+    # Use the same technique for long_mode_start
+    call .get_lm_addr
+.get_lm_addr:
+    pop %ebp
+    addl $(long_mode_start - .get_lm_addr), %ebp
+
+    # Manual far jump: push CS, push EIP, retf
+    pushl $0x08        # Code segment
+    pushl %ebp         # Address of long_mode_start
+    lret               # Far return (acts as far jump)
 
 .no_long_mode:
     cli
@@ -149,18 +183,22 @@ _start:
 .code64
 long_mode_start:
     # Clear segment registers
-    mov $0, %ax
+    xor %ax, %ax
     mov %ax, %ss
     mov %ax, %ds
     mov %ax, %es
     mov %ax, %fs
     mov %ax, %gs
 
-    # Set up stack - use hardcoded address
+    # Set up stack
     movabs $0x108000, %rsp
 
     # Clear frame pointer
     xor %rbp, %rbp
+
+    # EDI and ESI still contain Multiboot info from 32-bit mode
+    # These will be passed as first two arguments to kernel_main
+    # (if kernel_main signature is updated to accept them)
 
     # Call kernel_main
     call kernel_main
